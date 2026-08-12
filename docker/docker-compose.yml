@@ -1,0 +1,82 @@
+# MLflow stack: сервер + Postgres (метаданные) + MinIO (артефакты моделей).
+#
+# Поднять:   docker compose -f docker/docker-compose.yml up -d
+# UI:        http://localhost:5000
+# MinIO UI:  http://localhost:9001  (minioadmin / minioadmin)
+#
+# После подъёма train.py c --mlflow_uri http://localhost:5000 будет писать
+# метаданные в Postgres, а модель/артефакты — в MinIO, через сам MLflow-сервер
+# (проксируемые артефакты: клиенту креды S3 не нужны).
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"    # S3 API
+      - "9001:9001"    # web-консоль
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # одноразовый контейнер: создаёт бакет под артефакты и выходит
+  minio-init:
+    image: minio/mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/mlflow-artifacts &&
+      echo 'bucket mlflow-artifacts ready';
+      "
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      # креды нужны САМОМУ серверу, чтобы писать в MinIO
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://mlflow:mlflow@postgres:5432/mlflow
+      --artifacts-destination s3://mlflow-artifacts
+      --serve-artifacts
+      --host 0.0.0.0
+      --port 5000
+    ports:
+      - "5000:5000"
+
+volumes:
+  pgdata:
+  miniodata:
