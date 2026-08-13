@@ -41,6 +41,11 @@ def encode_head_tail(text: str, tokenizer, max_length: int = MAX_LENGTH,
         truncation=True,
         return_token_type_ids=True,
     )
+    # → {
+    #     "input_ids":      [101, 8203, 2054, 102],
+    #     "attention_mask": [1, 1, 1, 1], - на какие позиции модели смотреть (1), а какие игнорировать (0)
+    #     "token_type_ids": [0, 0, 0, 0], - сегментные id (какой текст A, какой B)
+    #   }
 
 
 class ReviewDataset(Dataset):

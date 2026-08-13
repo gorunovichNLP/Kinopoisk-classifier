@@ -1,2 +1,6 @@
 data/raw_dataset.csv
 data/clean_dataset.csv
+artifacts_from_gpu/model
+artifacts_from_gpu/label_map.json
+artifacts_from_gpu/thresholds.json
+.env.local
