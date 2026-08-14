@@ -1,0 +1,14 @@
+{
+  "temperature": 1.47061026096344,
+  "strategy": "class_bias",
+  "params": {
+    "bias": [
+      -1.5,
+      -0.25,
+      0.0
+    ]
+  },
+  "val_macro_f1": 0.7649709669874886,
+  "test_macro_f1": 0.7525566852350162,
+  "baseline_test_macro_f1": 0.7525295793104162
+}
