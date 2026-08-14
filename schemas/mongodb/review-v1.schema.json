@@ -1,0 +1,33 @@
+{
+  "$jsonSchema": {
+    "bsonType": "object",
+    "title": "Kinopoisk immutable review v1",
+    "required": [
+      "_id",
+      "text"
+    ],
+    "properties": {
+      "_id": {
+        "bsonType": "objectId",
+        "description": "Stable review identifier generated on insert."
+      },
+      "text": {
+        "bsonType": "string",
+        "minLength": 1,
+        "pattern": "\\S",
+        "description": "Original review text. It must be non-blank after trimming."
+      },
+      "movie_id": {
+        "bsonType": "string",
+        "minLength": 1,
+        "pattern": "\\S",
+        "description": "Optional external Kinopoisk movie identifier."
+      },
+      "created_at": {
+        "bsonType": "date",
+        "description": "Optional source creation time in UTC."
+      }
+    },
+    "additionalProperties": true
+  }
+}

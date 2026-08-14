@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kinopoisk-classifier.local/schemas/kafka/review-event-v1.schema.json",
+  "title": "Kinopoisk review event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "review_id",
+    "text",
+    "emitted_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "pattern": "^review:[0-9a-f]{24}$"
+    },
+    "review_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{24}$"
+    },
+    "movie_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "source_created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "emitted_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
