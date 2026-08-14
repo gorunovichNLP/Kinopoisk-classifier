@@ -19,6 +19,21 @@ import argparse
 from pathlib import Path
 
 import mlflow
+from mlflow import MlflowClient
+from mlflow.exceptions import MlflowException
+from mlflow.protos.databricks_pb2 import ErrorCode, RESOURCE_DOES_NOT_EXIST
+
+
+def _ensure_registered_model(client: MlflowClient, model_name: str) -> None:
+    """Создаёт имя модели один раз, не скрывая другие ошибки Registry."""
+
+    try:
+        client.get_registered_model(model_name)
+    except MlflowException as exc:
+        missing_model_error = ErrorCode.Name(RESOURCE_DOES_NOT_EXIST)
+        if exc.error_code != missing_model_error:
+            raise
+        client.create_registered_model(model_name)
 
 
 def main(args):
@@ -63,7 +78,20 @@ def main(args):
         print(f"[upload] артефакты залиты: {artifact_uri}")
 
         # === регистрация версии в Model Registry ===
-        result = mlflow.register_model(artifact_uri, args.model_name)
+        # Здесь лежит обычный Transformers serving-артефакт, а не MLflow Model
+        # с файлом MLmodel. В MLflow 3 функция mlflow.register_model() ищет
+        # отдельную сущность logged_model, поэтому для raw-артефакта используем
+        # прямой Registry API: версия ссылается на неизменяемый runs:/ source.
+        client = MlflowClient(
+            tracking_uri=args.mlflow_uri,
+            registry_uri=args.mlflow_uri,
+        )
+        _ensure_registered_model(client, args.model_name)
+        result = client.create_model_version(
+            name=args.model_name,
+            source=artifact_uri,
+            run_id=run_id,
+        )
         print(f"[upload] зарегистрировано: {args.model_name} v{result.version}")
 
     print(f"[upload] готово. run_id={run_id}")

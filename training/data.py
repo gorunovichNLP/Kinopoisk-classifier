@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-from shared.contracts import LABEL_MAP
+from kinopoisk_classifier.shared.contracts import LABEL_MAP
 
 
 def _read_one(args):

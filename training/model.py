@@ -7,7 +7,7 @@ import torch
 from sklearn.utils.class_weight import compute_class_weight
 from transformers import AutoModelForSequenceClassification
 
-from shared.contracts import MODEL_NAME, NUM_LABELS, LABEL_MAP, ID2LABEL
+from kinopoisk_classifier.shared.contracts import MODEL_NAME, NUM_LABELS, LABEL_MAP, ID2LABEL
 
 
 def build_model():

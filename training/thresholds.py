@@ -21,9 +21,9 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import f1_score, classification_report
 from transformers import AutoTokenizer, AutoModelForSequenceClassification, DataCollatorWithPadding
 
-from shared.contracts import ID2LABEL, NUM_LABELS
-from shared.encoding import ReviewDataset
-from shared.decision import apply_decision
+from kinopoisk_classifier.shared.contracts import ID2LABEL, NUM_LABELS
+from kinopoisk_classifier.shared.encoding import ReviewDataset
+from kinopoisk_classifier.shared.decision import apply_decision
 from training.data import load_clean_split
 
 

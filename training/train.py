@@ -23,9 +23,15 @@ from transformers import (
     get_linear_schedule_with_warmup,
 )
 
-from shared.contracts import MODEL_NAME, LABEL_MAP, MAX_LENGTH, HEAD_TOKENS, TAIL_TOKENS
+from kinopoisk_classifier.shared.contracts import (
+    HEAD_TOKENS,
+    LABEL_MAP,
+    MAX_LENGTH,
+    MODEL_NAME,
+    TAIL_TOKENS,
+)
 from training.data import load_clean_split
-from shared.encoding import ReviewDataset
+from kinopoisk_classifier.shared.encoding import ReviewDataset
 from training.model import build_model, class_weights
 from training.metrics import compute_metrics
 

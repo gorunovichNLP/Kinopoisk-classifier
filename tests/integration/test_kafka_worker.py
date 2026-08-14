@@ -15,9 +15,9 @@ from datetime import datetime, timezone
 
 from confluent_kafka import Consumer, Producer
 
-from inference.config import InferenceSettings
-from inference.worker import InferenceWorker
-from shared.schemas import (
+from kinopoisk_classifier.inference.config import InferenceSettings
+from kinopoisk_classifier.inference.worker import InferenceWorker
+from kinopoisk_classifier.shared.schemas import (
     LoadedModelMetadata,
     PredictionEventV1,
     ReviewEventV1,

@@ -6,7 +6,7 @@
 import numpy as np
 from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score
 
-from shared.contracts import ID2LABEL, NUM_LABELS
+from kinopoisk_classifier.shared.contracts import ID2LABEL, NUM_LABELS
 
 
 def compute_metrics(eval_pred):
