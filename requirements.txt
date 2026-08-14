@@ -6,3 +6,4 @@ torch
 mlflow
 pydantic>=2,<3
 pydantic-settings>=2,<3
+confluent-kafka>=2,<3

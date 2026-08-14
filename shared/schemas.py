@@ -79,6 +79,7 @@ PositiveFiniteFloat = Annotated[
     float,
     Field(gt=0.0, allow_inf_nan=False),
 ]
+NonNegativeInt = Annotated[int, Field(ge=0)]
 
 
 def make_review_event_id(review_id: str) -> str:
@@ -234,3 +235,20 @@ class PredictionEventV1(SentimentPrediction):
             raise ValueError("prediction_id does not match event and model version")
 
         return self
+
+
+class DeadLetterEventV1(BaseModel):
+    """Невалидное входное Kafka-сообщение, сохранённое для разбора."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[1]
+    worker: Literal["sentiment-inference"]
+    source_topic: NonBlankString
+    source_partition: NonNegativeInt
+    source_offset: NonNegativeInt
+    key_base64: str | None = None
+    payload_base64: str
+    error_type: NonBlankString
+    error_message: NonBlankString
+    failed_at: UtcDatetime
