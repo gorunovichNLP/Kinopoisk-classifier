@@ -1,4 +1,4 @@
-# Локальная инфраструктура: Kafka + MLflow + Postgres + MinIO.
+# Локальная инфраструктура: Kafka + MongoDB + MLflow + Postgres + MinIO.
 #
 # Поднять:   docker compose -f infra/docker/docker-compose.yml up -d
 # UI:        http://localhost:5000
@@ -9,6 +9,29 @@
 # (проксируемые артефакты: клиенту креды S3 не нужны).
 
 services:
+  mongo:
+    # MongoDB — источник неизменяемых отзывов для будущего Review Producer.
+    # Порт опубликован на host, потому что Python-сервис пока запускаем с Windows.
+    image: mongo:8.0.29
+    hostname: mongo
+    ports:
+      - "27017:27017"
+    environment:
+      # Это только локальные dev-учётные данные. В production секреты должны
+      # приходить из secret storage, а не храниться в compose-файле.
+      MONGO_INITDB_ROOT_USERNAME: kinopoisk
+      MONGO_INITDB_ROOT_PASSWORD: kinopoisk
+      MONGO_INITDB_DATABASE: kinopoisk
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      # Healthcheck проверяет не просто запущенный процесс, а ответ базы на ping.
+      test: ["CMD", "mongosh", "--quiet", "--username", "kinopoisk", "--password", "kinopoisk", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
   kafka:
     # Официальный Apache Kafka image. Kafka 4 работает в KRaft-режиме без
     # ZooKeeper: один процесс здесь одновременно broker и controller.
@@ -131,5 +154,6 @@ services:
       - "5000:5000"
 
 volumes:
+  mongodata:
   pgdata:
   miniodata:

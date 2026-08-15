@@ -76,8 +76,6 @@ class InferenceWorker:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
 
     def run(self, stop_event: Event | None = None) -> None:
-        """Запускает цикл до Ctrl+C или установки stop_event."""
-
         stop_event = stop_event or Event()
         self.consumer.subscribe([self.settings.input_topic])
         LOG.info("subscribed to %s", self.settings.input_topic)

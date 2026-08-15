@@ -6,7 +6,7 @@
 - `training/` — обучение, калибровка и загрузка модели в MLflow/MinIO;
 - `experiments/` — ensemble-эксперимент и внешняя baseline-модель;
 - `contracts/` — схемы Kafka, MongoDB и PostgreSQL;
-- `infra/docker/` — локальные Kafka, MLflow, MinIO и PostgreSQL;
+- `infra/docker/` — локальные Kafka, MongoDB, MLflow, MinIO и PostgreSQL;
 - `tests/` — интеграционные тесты.
 
 ## Создать окружение
