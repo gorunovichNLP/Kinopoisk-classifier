@@ -13,6 +13,9 @@ GoF Factory Method здесь не используется: функция main
 # logging выводит информацию о запуске и корректной остановке сервиса.
 import logging
 
+# Event позволяет интеграционному тесту и внешнему коду штатно остановить цикл.
+from threading import Event
+
 # MongoClient создаёт и держит пул соединений с MongoDB.
 from pymongo import MongoClient
 
@@ -37,7 +40,7 @@ LOG = logging.getLogger(__name__)
 
 
 # main — единственная функция, необходимая для запуска приложения.
-def main() -> None:
+def main(stop_event: Event | None = None) -> None:
     """Создаёт зависимости, запускает ReviewProducer и освобождает ресурсы."""
 
     # Настраиваем корневой logger до первого сообщения приложения.
@@ -101,7 +104,9 @@ def main() -> None:
         )
 
         # Метод блокирует текущий поток и обрабатывает новые отзывы постоянно.
-        review_producer.run()
+        # При обычном запуске stop_event равен None, и run создаст внутренний Event.
+        # Интеграционный тест передаёт внешний Event и завершает цикл через set().
+        review_producer.run(stop_event)
 
     # В PowerShell нажатие Ctrl+C превращается в KeyboardInterrupt.
     except KeyboardInterrupt:
