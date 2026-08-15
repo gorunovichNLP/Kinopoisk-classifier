@@ -1,5 +1,9 @@
 # Локальная инфраструктура: Kafka + MongoDB + MLflow + Postgres + MinIO.
 #
+# Архитектурный паттерн:
+# - Database per Service: MLflow и Prediction Writer используют отдельные базы
+#   и отдельные контейнеры PostgreSQL, поэтому их данные не смешиваются.
+#
 # Поднять:   docker compose -f infra/docker/docker-compose.yml up -d
 # UI:        http://localhost:5000
 # MinIO UI:  http://localhost:9001  (minioadmin / minioadmin)
@@ -86,6 +90,7 @@ services:
       "
 
   postgres:
+    # Этот PostgreSQL принадлежит только MLflow и хранит его служебные таблицы.
     image: postgres:16
     environment:
       POSTGRES_USER: mlflow
@@ -98,6 +103,32 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  predictions-postgres:
+    # Отдельная простая база для истории предсказаний нашего приложения.
+    # Порт 5433 на Windows не конфликтует с PostgreSQL MLflow внутри Compose.
+    image: postgres:16
+    ports:
+      - "5433:5432"
+    environment:
+      # Это только локальные dev-данные. Production-пароль должен храниться
+      # в secret storage, а не внутри compose-файла.
+      POSTGRES_USER: kinopoisk
+      POSTGRES_PASSWORD: kinopoisk
+      POSTGRES_DB: kinopoisk_predictions
+    volumes:
+      # Именованный volume сохраняет историю после stop/down без флага -v.
+      - predictions_pgdata:/var/lib/postgresql/data
+      # Официальный postgres image выполняет *.sql из этой папки только при
+      # первом создании пустой базы. Здесь автоматически создаётся наша таблица.
+      - ../../contracts/postgresql/001_create_prediction_history.sql:/docker-entrypoint-initdb.d/001_create_prediction_history.sql:ro
+    healthcheck:
+      # Проверяем, что сервер принимает подключения именно к нужной базе.
+      test: ["CMD-SHELL", "pg_isready -U kinopoisk -d kinopoisk_predictions"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   minio:
     image: minio/minio
@@ -156,4 +187,5 @@ services:
 volumes:
   mongodata:
   pgdata:
+  predictions_pgdata:
   miniodata:
