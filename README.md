@@ -27,6 +27,25 @@ python -m venv venv
 docker compose -f infra\docker\docker-compose.yml up -d
 ```
 
+## Запустить MongoDB Review Producer
+
+После запуска MongoDB и Kafka:
+
+```powershell
+python -m kinopoisk_classifier.review_producer
+```
+
+Настройки можно переопределять переменными окружения с префиксом
+`REVIEW_PRODUCER_`, например:
+
+```powershell
+$env:REVIEW_PRODUCER_BATCH_SIZE="50"
+$env:REVIEW_PRODUCER_POLL_INTERVAL_SECONDS="1"
+python -m kinopoisk_classifier.review_producer
+```
+
+Остановить сервис можно сочетанием `Ctrl+C`.
+
 ## Запустить тест с реальной моделью
 
 ```powershell
