@@ -40,6 +40,7 @@ class ReviewProducerSettings(BaseSettings):
     batch_size: PositiveInt = 50
     poll_interval_seconds: PositiveFloat = 1.0
     delivery_timeout_seconds: PositiveFloat = 30.0
+    mongo_server_selection_timeout_ms: PositiveInt = 5_000
 
     def producer_config(self) -> dict:
         """Настройки Kafka producer-а для будущего шага публикации.
