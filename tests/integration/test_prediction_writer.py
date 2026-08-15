@@ -14,10 +14,13 @@ import unittest
 import uuid
 from datetime import datetime, timezone
 from threading import Event, Thread
+from unittest.mock import patch
 
 import psycopg
 from confluent_kafka import Producer, TopicPartition
+from confluent_kafka.admin import AdminClient, NewTopic
 
+from kinopoisk_classifier.prediction_writer.__main__ import main
 from kinopoisk_classifier.prediction_writer.config import PredictionWriterSettings
 from kinopoisk_classifier.prediction_writer.postgres import (
     PostgresPredictionRepository,
@@ -38,6 +41,142 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     "set RUN_PREDICTION_WRITER_INTEGRATION=1 to use Docker Kafka and PostgreSQL",
 )
 class PredictionWriterIntegrationTest(unittest.TestCase):
+    def test_main_builds_application_saves_prediction_and_stops(self):
+        """Exercises the real Prediction Writer Composition Root."""
+
+        suffix = uuid.uuid4().hex
+        topic = f"kinopoisk.predictions.main-smoke-{suffix}"
+        group_id = f"prediction-writer-main-smoke-{suffix}"
+        review_id = suffix[:24]
+        source_event_id = make_review_event_id(review_id)
+        model_name = "writer-main-smoke-model"
+        model_version = suffix
+        prediction_id = make_prediction_id(
+            source_event_id,
+            model_name,
+            model_version,
+        )
+
+        prediction = PredictionEventV1(
+            schema_version=1,
+            prediction_id=prediction_id,
+            source_event_id=source_event_id,
+            review_id=review_id,
+            sentiment="pos",
+            label_id=2,
+            confidence=0.8,
+            probabilities={"neg": 0.1, "neu": 0.1, "pos": 0.8},
+            model={
+                "name": model_name,
+                "version": model_version,
+                "run_id": "writer-main-smoke-run",
+            },
+            predicted_at=datetime.now(timezone.utc),
+        )
+
+        base_settings = PredictionWriterSettings(_env_file=None)
+
+        # Временный topic полностью изолирует main smoke-тест от старых records.
+        admin = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
+        create_future = admin.create_topics(
+            [NewTopic(topic, num_partitions=1, replication_factor=1)]
+        )[topic]
+        create_future.result(timeout=10.0)
+
+        input_producer = Producer(
+            {"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS}
+        )
+        verification_connection = psycopg.connect(
+            str(base_settings.postgres_dsn),
+            connect_timeout=base_settings.postgres_connect_timeout_seconds,
+        )
+
+        # main() сам создаёт settings, поэтому настраиваем его через environment.
+        environment = {
+            "PREDICTION_WRITER_KAFKA_BOOTSTRAP_SERVERS": KAFKA_BOOTSTRAP_SERVERS,
+            "PREDICTION_WRITER_KAFKA_CLIENT_ID": f"writer-main-smoke-{suffix}",
+            "PREDICTION_WRITER_KAFKA_GROUP_ID": group_id,
+            "PREDICTION_WRITER_INPUT_TOPIC": topic,
+            "PREDICTION_WRITER_AUTO_OFFSET_RESET": "earliest",
+            "PREDICTION_WRITER_POLL_TIMEOUT_SECONDS": "0.2",
+            "PREDICTION_WRITER_POSTGRES_DSN": str(base_settings.postgres_dsn),
+            "PREDICTION_WRITER_POSTGRES_CONNECT_TIMEOUT_SECONDS": "5",
+        }
+
+        stop_event = Event()
+        thread_errors = []
+
+        def run_main():
+            try:
+                # Вызываем настоящую точку входа, а не собираем объекты вручную.
+                main(stop_event)
+            except BaseException as error:
+                thread_errors.append(error)
+
+        main_thread = Thread(target=run_main, daemon=True)
+
+        try:
+            # Публикуем до запуска main: уникальный пустой topic и earliest
+            # гарантируют, что Writer прочитает именно это сообщение.
+            input_producer.produce(
+                topic,
+                key=review_id.encode("utf-8"),
+                value=prediction.model_dump_json(exclude_none=True).encode("utf-8"),
+            )
+            self.assertEqual(input_producer.flush(10.0), 0)
+
+            # Переменные остаются установленными, пока main работает в Thread.
+            with patch.dict(os.environ, environment, clear=False):
+                main_thread.start()
+
+                row = None
+                deadline = time.monotonic() + 20.0
+                while time.monotonic() < deadline:
+                    if thread_errors:
+                        self.fail(
+                            f"PredictionWriter main failed: {thread_errors[0]!r}"
+                        )
+
+                    with verification_connection.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT sentiment FROM sentiment.prediction_history "
+                            "WHERE prediction_id = %s",
+                            (prediction_id,),
+                        )
+                        row = cursor.fetchone()
+                    verification_connection.commit()
+
+                    if row is not None:
+                        break
+                    time.sleep(0.05)
+                else:
+                    self.fail("PredictionWriter main did not save the event in time")
+
+                # Даём run() завершиться и main() выполнить finally.
+                stop_event.set()
+                main_thread.join(timeout=5.0)
+
+            self.assertEqual(row, ("pos",))
+            self.assertFalse(main_thread.is_alive())
+            self.assertEqual(thread_errors, [])
+        finally:
+            stop_event.set()
+            main_thread.join(timeout=5.0)
+            input_producer.flush(5.0)
+
+            with verification_connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM sentiment.prediction_history "
+                    "WHERE prediction_id = %s",
+                    (prediction_id,),
+                )
+            verification_connection.commit()
+            verification_connection.close()
+
+            # Удаляем только уникальный Kafka topic этого smoke-теста.
+            delete_future = admin.delete_topics([topic])[topic]
+            delete_future.result(timeout=10.0)
+
     def test_run_saves_prediction_commits_offset_and_stops(self):
         """Runs the writer, commits an event, and stops cleanly."""
 

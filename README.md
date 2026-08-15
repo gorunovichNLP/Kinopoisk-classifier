@@ -46,6 +46,17 @@ python -m kinopoisk_classifier.review_producer
 
 Остановить сервис можно сочетанием `Ctrl+C`.
 
+## Запустить Kafka Prediction Writer
+
+После запуска Kafka и `predictions-postgres`:
+
+```powershell
+python -m kinopoisk_classifier.prediction_writer
+```
+
+Настройки можно переопределять переменными с префиксом
+`PREDICTION_WRITER_`. Остановить сервис можно сочетанием `Ctrl+C`.
+
 ## Запустить тест с реальной моделью
 
 ```powershell
