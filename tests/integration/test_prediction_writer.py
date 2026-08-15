@@ -13,6 +13,7 @@ import time
 import unittest
 import uuid
 from datetime import datetime, timezone
+from threading import Event, Thread
 
 import psycopg
 from confluent_kafka import Producer, TopicPartition
@@ -37,8 +38,8 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     "set RUN_PREDICTION_WRITER_INTEGRATION=1 to use Docker Kafka and PostgreSQL",
 )
 class PredictionWriterIntegrationTest(unittest.TestCase):
-    def test_prediction_is_saved_before_kafka_offset_is_committed(self):
-        """Stores a real Kafka event and commits its offset."""
+    def test_run_saves_prediction_commits_offset_and_stops(self):
+        """Runs the writer, commits an event, and stops cleanly."""
 
         suffix = uuid.uuid4().hex
         review_id = suffix[:24]
@@ -97,6 +98,19 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             connect_timeout=settings.postgres_connect_timeout_seconds,
         )
 
+        # run() блокирует поток, поэтому запускаем его в фоне.
+        stop_event = Event()
+        thread_errors = []
+
+        def run_writer():
+            try:
+                writer.run(stop_event)
+            except BaseException as error:
+                # Исключение из Thread не падает в основном тестовом потоке само.
+                thread_errors.append(error)
+
+        writer_thread = Thread(target=run_writer, daemon=True)
+
         try:
             # Сначала poll позволяет Kafka назначить partition новой group.
             # После assignment позиция latest уже зафиксирована; теперь новое
@@ -119,23 +133,39 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             self.assertEqual(delivery_errors, [])
             self.assertEqual(len(delivered_messages), 1)
 
+            # Запускаем настоящий бесконечный цикл после публикации сообщения.
+            writer_thread.start()
+
+            # Ждём видимую закоммиченную строку в отдельном соединении.
+            row = None
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
-                if writer.run_once() == 1:
-                    break
-            else:
-                self.fail("PredictionWriter did not consume the event in time")
+                if thread_errors:
+                    self.fail(f"PredictionWriter failed: {thread_errors[0]!r}")
 
-            with verification_connection.cursor() as cursor:
-                cursor.execute(
-                    "SELECT sentiment FROM sentiment.prediction_history "
-                    "WHERE prediction_id = %s",
-                    (prediction_id,),
-                )
-                row = cursor.fetchone()
-            verification_connection.commit()
+                with verification_connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT sentiment FROM sentiment.prediction_history "
+                        "WHERE prediction_id = %s",
+                        (prediction_id,),
+                    )
+                    row = cursor.fetchone()
+                verification_connection.commit()
+
+                if row is not None:
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("PredictionWriter did not save the event in time")
+
+            # Просим цикл остановиться. Если Writer уже начал следующий poll,
+            # join подождёт не дольше poll_timeout_seconds плюс небольшой запас.
+            stop_event.set()
+            writer_thread.join(timeout=5.0)
 
             self.assertEqual(row, ("neu",))
+            self.assertFalse(writer_thread.is_alive())
+            self.assertEqual(thread_errors, [])
 
             # Delivery callback сообщает точные partition и offset сообщения.
             delivered = delivered_messages[0]
@@ -145,6 +175,8 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(committed[0].offset, delivered.offset() + 1)
         finally:
+            stop_event.set()
+            writer_thread.join(timeout=5.0)
             input_producer.flush(5.0)
             writer.close()
             repository.close()

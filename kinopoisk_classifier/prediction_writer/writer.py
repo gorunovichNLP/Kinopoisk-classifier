@@ -1,15 +1,18 @@
-"""Одна итерация Kafka → PostgreSQL Prediction Writer.
+"""Рабочий цикл Kafka → PostgreSQL Prediction Writer.
 
 Паттерны проектирования:
 - Mediator (GoF): PredictionWriter задаёт порядок работы Kafka Consumer и
   PostgreSQL Repository, которые ничего не знают друг о друге.
-- Facade (GoF): один метод run_once() выполняет весь сценарий сообщения.
+- Facade (GoF): run() запускает сервис, а run_once() выполняет одно сообщение.
 
 Архитектурные приёмы:
 - Application Service: класс реализует один прикладной сценарий системы.
 - Dependency Injection: repository и необязательный consumer приходят снаружи.
 - At-least-once Processing: Kafka offset подтверждается после PostgreSQL commit.
 """
+
+# Event — потокобезопасный флаг для управляемой остановки цикла.
+from threading import Event
 
 # Consumer получает сообщения, а KafkaException сообщает об ошибке broker-а.
 from confluent_kafka import Consumer, KafkaError, KafkaException
@@ -27,7 +30,7 @@ from kinopoisk_classifier.shared.schemas import PredictionEventV1
 
 
 class PredictionWriter:
-    """Читает одно prediction-сообщение и надёжно сохраняет его в PostgreSQL."""
+    """Постоянно читает predictions и надёжно сохраняет их в PostgreSQL."""
 
     def __init__(
         self,
@@ -50,6 +53,23 @@ class PredictionWriter:
 
         # Writer читает только topic с готовыми predictions.
         self.consumer.subscribe([settings.input_topic])
+
+    def run(self, stop_event: Event | None = None) -> None:
+        """Обрабатывает Kafka-сообщения, пока не запрошена остановка."""
+
+        # При обычном запуске внешний Event не нужен: создаём его сами.
+        # Интеграционный тест передаёт Event и вызывает set() для остановки.
+        if stop_event is None:
+            stop_event = Event()
+
+        # После stop_event.set() новая итерация больше не начинается.
+        while not stop_event.is_set():
+            # run_once уже содержит весь безопасный порядок:
+            # PostgreSQL commit выполняется раньше Kafka offset commit.
+            self.run_once()
+
+            # Дополнительный sleep здесь не нужен. Если сообщений нет,
+            # consumer.poll() внутри run_once уже ждёт poll_timeout_seconds.
 
     def run_once(self) -> int:
         """Обрабатывает максимум одно сообщение и возвращает 0 или 1."""
