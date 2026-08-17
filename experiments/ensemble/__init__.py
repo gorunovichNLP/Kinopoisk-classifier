@@ -1,1 +1,1 @@
-"""Эксперимент оценки ансамбля моделей."""
+"""Ensemble evaluation utilities."""

@@ -1,4 +1,4 @@
-"""Чтение неизменяемых отзывов из MongoDB небольшими batch-ами."""
+"""Read immutable MongoDB reviews in ordered batches."""
 
 from bson import ObjectId
 from pydantic import TypeAdapter
@@ -12,12 +12,7 @@ OBJECT_ID_ADAPTER = TypeAdapter(ObjectIdString)
 
 
 class MongoReviewReader:
-    """Читает следующую страницу отзывов после заданного Mongo ObjectId.
-
-    Reader пока ничего не публикует и не записывает в MongoDB. Его единственная
-    задача на этом шаге — построить корректный запрос, отсортировать документы
-    и провалидировать каждый результат через ``MongoReview``.
-    """
+    """Ordered reader for immutable MongoDB reviews."""
 
     def __init__(
         self,
@@ -28,9 +23,9 @@ class MongoReviewReader:
         self.settings = settings
         self._owns_client = client is None
 
-        # MongoClient устанавливает соединение лениво: реальный сетевой запрос
-        # произойдёт при первом find или command. tz_aware критичен для нашего
-        # контракта — даты из BSON должны приходить как timezone-aware UTC.
+
+
+
         if client is None:
             self.client = MongoClient(
                 str(settings.mongo_uri),
@@ -38,20 +33,15 @@ class MongoReviewReader:
                 serverSelectionTimeoutMS=settings.mongo_server_selection_timeout_ms,
             )
         else:
-            # Явная проверка `is None` важнее короткого `client or ...`:
-            # объекты database-драйверов не обязаны поддерживать bool(client).
+
+
             self.client = client
         self.collection = self.client[settings.mongo_database][
             settings.reviews_collection
         ]
 
     def read_batch(self, after_review_id: str | None = None) -> list[MongoReview]:
-        """Возвращает не больше ``batch_size`` отзывов по возрастанию ``_id``.
-
-        ``after_review_id=None`` означает первый запуск и чтение с начала.
-        Иначе запрос использует строгое ``$gt``: сам checkpoint-документ второй
-        раз в batch не попадёт.
-        """
+        """Read the next ordered batch after an optional cursor."""
 
         query = {}
         if after_review_id is not None:
@@ -69,12 +59,12 @@ class MongoReviewReader:
         return [MongoReview.model_validate(document) for document in cursor]
 
     def ping(self) -> None:
-        """Принудительно проверяет соединение, потому что MongoClient ленивый."""
+        """Verify the backing service connection."""
 
         self.client.admin.command("ping")
 
     def close(self) -> None:
-        """Закрывает только тот MongoClient, который reader создал сам."""
+        """Close resources owned by this instance."""
 
         if self._owns_client:
             self.client.close()

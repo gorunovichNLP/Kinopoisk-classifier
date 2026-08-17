@@ -1,1 +1,1 @@
-"""Загрузка модели и Kafka inference worker."""
+"""Production model inference components."""

@@ -1,1 +1,1 @@
-"""Внешние модели для сравнения с основной моделью."""
+"""External baseline model integrations."""

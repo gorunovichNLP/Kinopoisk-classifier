@@ -1,42 +1,42 @@
 # Kinopoisk Classifier
 
-## Структура проекта
+## Project structure
 
-- `kinopoisk_classifier/` — production-код inference-сервиса и общая train/serve-логика;
-- `training/` — обучение, калибровка и загрузка модели в MLflow/MinIO;
-- `experiments/` — ensemble-эксперимент и внешняя baseline-модель;
-- `contracts/` — схемы Kafka, MongoDB и PostgreSQL;
-- `infra/docker/` — локальные Kafka, MongoDB, MLflow, MinIO и PostgreSQL;
-- `tests/` — интеграционные тесты.
+- `kinopoisk_classifier/` contains the production services and shared train/serve logic;
+- `training/` contains model training, calibration, and MLflow registration;
+- `experiments/` contains ensemble experiments and external baselines;
+- `contracts/` contains MongoDB and PostgreSQL schemas;
+- `infra/docker/` contains the local Kafka, MongoDB, MLflow, MinIO, and PostgreSQL stack;
+- `tests/` contains integration and end-to-end tests.
 
-## Создать окружение
+## Create a virtual environment
 
 ```powershell
 python -m venv venv
 ```
 
-## Активировать окружение
+## Activate the environment
 
 ```powershell
 .\venv\Scripts\Activate.ps1
 ```
 
-## Поднять локальную инфраструктуру
+## Start the local infrastructure
 
 ```powershell
 docker compose -f infra\docker\docker-compose.yml up -d
 ```
 
-## Запустить MongoDB Review Producer
+## Run the MongoDB Review Producer
 
-После запуска MongoDB и Kafka:
+After MongoDB and Kafka are running:
 
 ```powershell
 python -m kinopoisk_classifier.review_producer
 ```
 
-Настройки можно переопределять переменными окружения с префиксом
-`REVIEW_PRODUCER_`, например:
+Override settings with environment variables prefixed with
+`REVIEW_PRODUCER_`, for example:
 
 ```powershell
 $env:REVIEW_PRODUCER_BATCH_SIZE="50"
@@ -44,20 +44,20 @@ $env:REVIEW_PRODUCER_POLL_INTERVAL_SECONDS="1"
 python -m kinopoisk_classifier.review_producer
 ```
 
-Остановить сервис можно сочетанием `Ctrl+C`.
+Stop the service with `Ctrl+C`.
 
-## Запустить Kafka Prediction Writer
+## Run the Kafka Prediction Writer
 
-После запуска Kafka и `predictions-postgres`:
+After Kafka and `predictions-postgres` are running:
 
 ```powershell
 python -m kinopoisk_classifier.prediction_writer
 ```
 
-Настройки можно переопределять переменными с префиксом
-`PREDICTION_WRITER_`. Остановить сервис можно сочетанием `Ctrl+C`.
+Override settings with environment variables prefixed with
+`PREDICTION_WRITER_`. Stop the service with `Ctrl+C`.
 
-## Запустить тест с реальной моделью
+## Run the real-model integration test
 
 ```powershell
 $env:RUN_REAL_MODEL_INTEGRATION="1"

@@ -1,16 +1,4 @@
-"""
-Прогон seara-модели на val/test + оценка потенциала ансамбля с нашей моделью.
-
-Что делает:
-  1. seara на val/test -> её сольный macro-F1 (zero-shot на Кинопоиске);
-  2. наша модель на val/test -> её вероятности (для ансамбля);
-  3. ансамбль (усреднение вероятностей) на val -> подбор веса -> честная оценка на test;
-  4. анализ: где модели ошибаются по-разному (перспективность ансамбля);
-  5. ВСЁ сохраняется в JSON (метрики seara нужны потом для заливки в MLflow).
-
-Запуск:
-    python -m experiments.ensemble.evaluate --dataset_dir <path> --our_model artifacts_from_gpu/model --out experiments/ensemble/results.json
-"""
+"""Evaluate the project model, the Seara baseline, and their ensemble."""
 
 import json
 import argparse
@@ -30,7 +18,7 @@ from training.data import load_clean_split
 
 
 def our_probs(df, model, tokenizer, device, batch_size=32):
-    """Вероятности НАШЕЙ модели (N,3) в порядке [neg,neu,pos]."""
+    """Return project-model probabilities in canonical label order."""
     ds = ReviewDataset(df["text"], df["label_id"], tokenizer)
     loader = DataLoader(ds, batch_size=batch_size, collate_fn=DataCollatorWithPadding(tokenizer))
     logits = []
@@ -58,13 +46,13 @@ def main(args):
     _, val_df, test_df = load_clean_split(args.dataset_dir, seed=args.seed)
     y_val, y_test = val_df["label_id"].to_numpy(), test_df["label_id"].to_numpy()
 
-    # === наша модель ===
+
     our_tok = AutoTokenizer.from_pretrained(args.our_model)
     our_model = AutoModelForSequenceClassification.from_pretrained(args.our_model).to(device)
     our_val = our_probs(val_df, our_model, our_tok, device, args.batch_size)
     our_test = our_probs(test_df, our_model, our_tok, device, args.batch_size)
 
-    # === seara (выровнена в наш порядок) ===
+
     seara = SearaModel(device=device)
     seara_val = seara.probs(val_df["text"], args.batch_size)
     seara_test = seara.probs(test_df["text"], args.batch_size)
@@ -72,12 +60,12 @@ def main(args):
     our_solo = mf1(our_test, y_test)
     seara_solo = mf1(seara_test, y_test)
 
-    # === анализ рассогласования ===
+
     our_pred, seara_pred = our_test.argmax(1), seara_test.argmax(1)
     disagree = float((our_pred != seara_pred).mean())
     both_wrong = float(((our_pred != y_test) & (seara_pred != y_test)).mean())
 
-    # === подбор веса ансамбля на VAL ===
+
     best_w, best_f = 0.5, -1.0
     weight_sweep = {}
     for w in np.arange(0.0, 1.01, 0.05):
@@ -86,25 +74,28 @@ def main(args):
         if f > best_f:
             best_f, best_w = f, float(w)
 
-    # === честная оценка ансамбля на TEST ===
+
     ens_test = best_w * our_test + (1 - best_w) * seara_test
     ens_solo = mf1(ens_test, y_test)
 
-    # === вывод ===
-    print("\n=== СОЛЬНЫЕ macro-F1 (test) ===")
-    print(f"наша  : {our_solo:.4f}")
+
+    print("\n=== STANDALONE macro-F1 (test) ===")
+    print(f"project model : {our_solo:.4f}")
     print(f"seara : {seara_solo:.4f}")
-    print(f"\nрасходятся: {disagree:.1%} | обе ошибаются вместе: {both_wrong:.1%}")
-    print(f"\nлучший вес нашей модели (val): {best_w:.2f} (val macro-F1={best_f:.4f})")
-    print("\n=== TEST (честно) ===")
-    print(f"наша одиночная : {our_solo:.4f}")
-    print(f"ансамбль       : {ens_solo:.4f}")
-    print(f"прирост        : {ens_solo - our_solo:+.4f}")
-    print("\nper-class ансамбля на test:")
+    print(f"\ndisagreement: {disagree:.1%} | both wrong: {both_wrong:.1%}")
+    print(
+        f"\nbest project-model weight (val): {best_w:.2f} "
+        f"(val macro-F1={best_f:.4f})"
+    )
+    print("\n=== TEST (unbiased evaluation) ===")
+    print(f"project model : {our_solo:.4f}")
+    print(f"ensemble      : {ens_solo:.4f}")
+    print(f"gain          : {ens_solo - our_solo:+.4f}")
+    print("\nper-class ensemble metrics on test:")
     print(classification_report(y_test, ens_test.argmax(1),
                                 target_names=[ID2LABEL[i] for i in range(NUM_LABELS)], digits=3))
 
-    # === сохранение результатов в JSON ===
+
     results = {
         "our_model": {
             "test_macro_f1": our_solo,
@@ -132,7 +123,7 @@ def main(args):
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(results, f, ensure_ascii=False, indent=2)
-    print(f"\n[eval] результаты сохранены -> {args.out}")
+    print(f"\n[eval] results saved -> {args.out}")
 
 
 if __name__ == "__main__":

@@ -1,47 +1,47 @@
-# Локальный Kafka-контур
+# Local Kafka environment
 
-Kafka запускается одним broker/controller в KRaft-режиме. ZooKeeper не нужен.
-Данные broker-а живут внутри dev-контейнера и сбрасываются при его пересоздании;
-для интеграционных тестов это полезнее старого состояния между запусками.
+Kafka runs as a single broker/controller in KRaft mode and does not require
+ZooKeeper. Broker data lives inside the development container and is reset when
+that container is recreated. This keeps integration tests isolated from stale
+state.
 
-## Почему два listener-а
+## Why two listeners are required
 
-- `localhost:9092` — адрес для Python-процессов на Windows;
-- `kafka:19092` — адрес внутри Docker network.
+- `localhost:9092` is used by Python processes running on Windows;
+- `kafka:19092` is used inside the Docker network.
 
-Kafka-клиент использует bootstrap address только для первого соединения. Затем
-broker возвращает `advertised.listeners`, поэтому адрес должен быть доступен из
-той сети, где работает клиент.
+A Kafka client uses the bootstrap address only for its initial connection. The
+broker then returns `advertised.listeners`, so the advertised address must be
+reachable from the client's network.
 
-## Запуск
+## Start Kafka
 
 ```powershell
 docker compose -f infra/docker/docker-compose.yml up -d kafka kafka-init
 docker compose -f infra/docker/docker-compose.yml ps
 ```
 
-`kafka-init` создаёт:
+`kafka-init` creates:
 
-- `kinopoisk.reviews.v1` — 3 partitions;
-- `kinopoisk.predictions.v1` — 3 partitions;
-- `kinopoisk.reviews.dlq.v1` — 1 partition.
+- `kinopoisk.reviews.v1` with 3 partitions;
+- `kinopoisk.predictions.v1` with 3 partitions;
+- `kinopoisk.reviews.dlq.v1` with 1 partition.
 
-## Интеграционный тест
+## Integration test
 
 ```powershell
 $env:RUN_KAFKA_INTEGRATION="1"
 python -m unittest tests.integration.test_kafka_worker -v
 ```
 
-В тесте используется fake runtime. Это намеренно: сначала отдельно проверяем
-Kafka, batching, публикацию результата и commit offsets, не смешивая возможные
-ошибки брокера с загрузкой BERT из MinIO.
+This test uses a fake runtime so that Kafka, batching, result publication, and
+offset commits can be verified independently from BERT and MinIO failures.
 
-## Интеграционный тест с настоящей моделью
+## Integration test with a real model
 
-Когда быстрый Kafka-тест проходит, можно проверить весь inference-контур с
-конкретной версией модели из MLflow Registry. Файлы этой версии скачиваются
-через MLflow из MinIO; локальная папка с весами не используется.
+After the fast Kafka test passes, verify the inference path with a specific
+MLflow Registry model version. MLflow downloads that version from MinIO; the
+test does not use a local weights directory.
 
 ```powershell
 $env:RUN_REAL_MODEL_INTEGRATION="1"
@@ -49,12 +49,12 @@ $env:INFERENCE_MODEL_VERSION="2"
 venv\Scripts\python -m unittest tests.integration.test_kafka_real_model -v
 ```
 
-В примере `2` — не специальное значение: укажи номер нужной `READY`-версии из
-своего Registry. В текущем локальном Registry корректный полный артефакт имеет
-версию `2`.
+The value `2` is only an example. Set the number of the required `READY` version
+from your registry. In the current local registry, version `2` contains a
+complete serving artifact.
 
-Тест берёт один настоящий отзыв из `data/clean_dataset.csv`. Другой CSV с
-колонкой `text` можно передать через `REAL_REVIEW_CSV`. Тест проверяет не
-ожидаемую тональность конкретной фразы, а более важный контракт: сообщение
-обработала реальная Registry-версия, а в output topic появился полностью
-валидный `PredictionEventV1` с метаданными именно этой модели.
+The test reads one real review from `data/clean_dataset.csv`. Set
+`REAL_REVIEW_CSV` to use another CSV containing a `text` column. The assertion
+does not depend on the expected sentiment of one phrase. It verifies that the
+configured registry version processed the event and produced a fully valid
+`PredictionEventV1` with matching model metadata.

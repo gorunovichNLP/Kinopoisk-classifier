@@ -1,1 +1,1 @@
-"""Основной Python-пакет сервиса классификации отзывов."""
+"""Kinopoisk sentiment classification package."""

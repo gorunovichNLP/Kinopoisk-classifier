@@ -1,9 +1,4 @@
-"""Pydantic-модели внешних данных inference-пайплайна.
-
-Модели валидируют данные на границах сервисов. Kafka-контракты запрещают
-неизвестные поля, а MongoReview игнорирует дополнительные поля исходного
-документа, которые Producer v1 не использует.
-"""
+"""Validated data contracts for the inference pipeline."""
 
 from __future__ import annotations
 
@@ -32,7 +27,7 @@ PROBABILITY_TOLERANCE = 1e-6
 
 
 def _normalize_object_id(value: object) -> str:
-    """Принимает bson.ObjectId без прямой зависимости shared-кода от PyMongo."""
+    """Normalize a MongoDB ObjectId as lowercase text."""
 
     normalized = str(value).lower()
     if re.fullmatch(OBJECT_ID_PATTERN, normalized) is None:
@@ -91,14 +86,14 @@ def make_prediction_id(
     model_name: str,
     model_version: str,
 ) -> str:
-    """Строит стабильный id для идемпотентной записи prediction history."""
+    """Build a stable identifier for an idempotent prediction write."""
 
     raw = f"{source_event_id}\0{model_name}\0{model_version}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 
 
 class MongoReview(BaseModel):
-    """Нормализованное представление неизменяемого документа `reviews`."""
+    """Normalized immutable review document."""
 
     model_config = ConfigDict(
         extra="ignore",
@@ -114,7 +109,7 @@ class MongoReview(BaseModel):
 
 
 class ReviewEventV1(BaseModel):
-    """Value топика `kinopoisk.reviews.v1`."""
+    """Versioned review event published to Kafka."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -135,7 +130,7 @@ class ReviewEventV1(BaseModel):
 
 
 class ClassProbabilities(BaseModel):
-    """Вероятности в фиксированном порядке классов neg/neu/pos."""
+    """Probabilities in canonical neg, neu, pos order."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -151,7 +146,7 @@ class ClassProbabilities(BaseModel):
 
 
 class InferenceModelVersion(BaseModel):
-    """Версия модели, фактически загруженная worker-ом из Registry."""
+    """Identity of the model used for inference."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -161,7 +156,7 @@ class InferenceModelVersion(BaseModel):
 
 
 class LoadedModelMetadata(InferenceModelVersion):
-    """Registry-метаданные модели, загруженной runtime-ом из MinIO."""
+    """Registry metadata for the loaded model version."""
 
     run_id: NonBlankString
     registry_uri: NonBlankString
@@ -169,7 +164,7 @@ class LoadedModelMetadata(InferenceModelVersion):
 
 
 class DecisionConfig(BaseModel):
-    """Serving-часть `thresholds.json`; train-метрики намеренно игнорируются."""
+    """Validated serving decision configuration."""
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
@@ -179,7 +174,7 @@ class DecisionConfig(BaseModel):
 
 
 class SentimentPrediction(BaseModel):
-    """Результат runtime до добавления Kafka event metadata."""
+    """Validated model prediction before event metadata is added."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -207,7 +202,7 @@ class SentimentPrediction(BaseModel):
 
 
 class PredictionEventV1(SentimentPrediction):
-    """Value топика `kinopoisk.predictions.v1`."""
+    """Versioned prediction event published to Kafka."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -238,7 +233,7 @@ class PredictionEventV1(SentimentPrediction):
 
 
 class DeadLetterEventV1(BaseModel):
-    """Невалидное входное Kafka-сообщение, сохранённое для разбора."""
+    """Invalid Kafka input retained for investigation."""
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 

@@ -1,4 +1,4 @@
-"""Интеграционный тест Review Publisher с настоящим Kafka broker."""
+"""Integration tests for publishing review events to Kafka."""
 
 import os
 import time
@@ -42,7 +42,7 @@ class KafkaReviewPublisherIntegrationTest(unittest.TestCase):
         review = MongoReview.model_validate(
             {
                 "_id": review_id,
-                "text": "Отзыв для проверки MongoDB → Kafka",
+                "text": "Review used to verify the MongoDB-to-Kafka path",
                 "created_at": datetime.now(timezone.utc),
             }
         )

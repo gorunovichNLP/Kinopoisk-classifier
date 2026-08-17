@@ -1,19 +1,4 @@
-r"""Полный интеграционный тест inference-контура с настоящей моделью.
-
-Проверяем один реальный отзыв по маршруту:
-
-    dataset -> Kafka reviews -> InferenceWorker -> MLflow/MinIO model
-            -> Kafka predictions -> PredictionEventV1
-
-Mongo Producer здесь пока намеренно не участвует: его добавим отдельным шагом.
-Сейчас важно проверить границу Kafka + настоящий runtime, чтобы при ошибке было
-понятно, в какой части контура её искать.
-
-Тест тяжёлый и поэтому выключен по умолчанию. Запуск из корня проекта:
-
-    $env:RUN_REAL_MODEL_INTEGRATION="1"
-    venv\Scripts\python -m unittest tests.integration.test_kafka_real_model -v
-"""
+"""Integration test for Kafka inference with a real registry model."""
 
 import csv
 import os
@@ -45,8 +30,8 @@ MLFLOW_TRACKING_URI = os.getenv(
     "http://localhost:5000",
 )
 MODEL_NAME = os.getenv("INFERENCE_MODEL_NAME", "rubert-sentiment")
-# Версию требуем указать явно. Так тест не начнёт незаметно проверять другую
-# модель после появления новых Registry-версий.
+
+
 MODEL_VERSION = os.getenv("INFERENCE_MODEL_VERSION")
 REVIEW_CSV = Path(
     os.getenv("REAL_REVIEW_CSV", PROJECT_ROOT / "data" / "clean_dataset.csv")
@@ -54,7 +39,7 @@ REVIEW_CSV = Path(
 
 
 def _read_one_real_review(csv_path: Path) -> str:
-    """Читает только первую строку датасета, не загружая большой CSV в память."""
+    """Read one non-blank review from a CSV dataset."""
 
     if not csv_path.is_file():
         raise FileNotFoundError(
@@ -76,12 +61,12 @@ def _read_one_real_review(csv_path: Path) -> str:
 )
 class KafkaRealModelIntegrationTest(unittest.TestCase):
     def test_real_review_produces_valid_prediction_event(self):
-        # Декоратор выше не запускает тест без версии. assert нужен ещё и для
-        # читателя/IDE: ниже MODEL_VERSION уже точно является строкой.
+
+
         assert MODEL_VERSION is not None
 
-        # Runtime создаём до Kafka-клиентов. Если Registry или MinIO недоступны,
-        # тест упадёт на конкретной границе загрузки модели, а не по Kafka timeout.
+
+
         runtime = ModelRuntime.from_registry(
             tracking_uri=MLFLOW_TRACKING_URI,
             model_name=MODEL_NAME,
@@ -117,8 +102,8 @@ class KafkaRealModelIntegrationTest(unittest.TestCase):
             batch_timeout_ms=100,
             poll_timeout_seconds=2.0,
             delivery_timeout_seconds=15.0,
-            # У топика уже может быть история от прошлых запусков теста. Для
-            # этого сценария нас интересует только отзыв, который создадим ниже.
+
+
             auto_offset_reset="latest",
         )
         worker = InferenceWorker(settings, runtime)
@@ -142,11 +127,11 @@ class KafkaRealModelIntegrationTest(unittest.TestCase):
             worker.consumer.subscribe([settings.input_topic])
             output_consumer.subscribe([settings.output_topic])
 
-            # Одной subscribe() недостаточно: partitions назначаются только во
-            # время poll(). Если отправить отзыв раньше, consumer с `latest`
-            # может получить стартовую позицию уже ПОСЛЕ него и пропустить тест.
-            # Поэтому сначала дожидаемся assignment и фиксируем текущий конец
-            # обоих топиков, а уже затем публикуем входное сообщение.
+
+
+
+
+
             self._start_from_current_topic_end(
                 worker.consumer,
                 consumer_name="inference consumer",
@@ -163,9 +148,9 @@ class KafkaRealModelIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(input_producer.flush(15.0), 0)
 
-            # Assignment уже готов, но доставка сообщения между producer и
-            # broker всё равно асинхронна. Несколько run_once() дают Kafka время
-            # вернуть только что опубликованный отзыв.
+
+
+
             inference_deadline = time.monotonic() + 300.0
             while time.monotonic() < inference_deadline:
                 if worker.run_once() > 0:
@@ -180,8 +165,8 @@ class KafkaRealModelIntegrationTest(unittest.TestCase):
                 deadline=prediction_deadline,
             )
 
-            # Сам вызов model_validate_json уже доказывает соответствие полному
-            # PredictionEventV1: probabilities, confidence, label и id согласованы.
+
+
             self.assertEqual(prediction.review_id, review_id)
             self.assertEqual(prediction.source_event_id, review.event_id)
             self.assertEqual(prediction.model.name, MODEL_NAME)
@@ -194,12 +179,7 @@ class KafkaRealModelIntegrationTest(unittest.TestCase):
             worker.consumer.close()
 
     def _start_from_current_topic_end(self, consumer, consumer_name):
-        """Изолирует тест от сообщений, оставшихся после прошлых запусков.
-
-        Production consumer так не перематываем: там история и committed offset
-        обязательны. Здесь каждая consumer group одноразовая, а старые records
-        относятся к другим тестовым примерам и только мешают проверке.
-        """
+        """Position a test consumer at the current topic end."""
 
         assignment_deadline = time.monotonic() + 30.0
         while time.monotonic() < assignment_deadline:
@@ -211,9 +191,9 @@ class KafkaRealModelIntegrationTest(unittest.TestCase):
             if not assignment:
                 continue
 
-            # high watermark — offset следующего сообщения после последнего
-            # существующего record. seek(high) означает: старую историю не
-            # читаем, но всё опубликованное после этой строки уже увидим.
+
+
+
             for partition in assignment:
                 _, high_watermark = consumer.get_watermark_offsets(
                     partition,
@@ -231,7 +211,7 @@ class KafkaRealModelIntegrationTest(unittest.TestCase):
         self.fail(f"Kafka did not assign partitions to {consumer_name} in time")
 
     def _find_prediction(self, consumer, review_id, deadline):
-        """Пропускает старые события и ждёт prediction именно нашего отзыва."""
+        """Wait for the prediction associated with a review."""
 
         while time.monotonic() < deadline:
             message = consumer.poll(1.0)

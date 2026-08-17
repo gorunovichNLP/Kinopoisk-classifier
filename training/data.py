@@ -1,9 +1,4 @@
-"""
-Загрузка корпуса Кинопоиска, чистка, стратифицированный сплит.
-
-Структура датасета: dataset/{neg,neu,pos}/*.txt, один .txt = один отзыв,
-имя папки = метка.
-"""
+"""Load, clean, snapshot, and split the Kinopoisk review corpus."""
 
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -21,27 +16,27 @@ def _read_one(args):
 
 
 def _save_snapshot(df: pd.DataFrame, out_path: str) -> None:
-    """Снапшот датасета (raw или clean) для воспроизводимости и EDA."""
+    """Persist a reproducible dataset snapshot."""
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
-    df.to_csv(out, index=False, encoding="utf-8") 
-    print(f"[snapshot] {len(df)} строк -> {out}")
+    df.to_csv(out, index=False, encoding="utf-8")
+    print(f"[snapshot] {len(df)} rows -> {out}")
 
 
 def load_reviews(dataset_dir: str, max_workers: int = 16) -> pd.DataFrame:
-    """
-    Читает все .txt из neg/neu/pos в один DataFrame.
-    """
+    """Load all review files into a dataframe."""
 
     base = Path(dataset_dir)
     out = Path("data/raw_dataset.csv")
     if out.exists():
         print(f"[load] cache hit -> {out}")
         return pd.read_csv(out)
-    
+
     tasks = [(fp, cls) for cls in LABEL_MAP for fp in (base / cls).glob("*.txt")]
     if not tasks:
-        raise FileNotFoundError(f"Нет .txt в {base}/[neg,neu,pos]. Проверь путь.")
+        raise FileNotFoundError(
+            f"No .txt files found in {base}/[neg,neu,pos]. Check the path."
+        )
 
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         rows = list(ex.map(_read_one, tasks))
@@ -52,25 +47,21 @@ def load_reviews(dataset_dir: str, max_workers: int = 16) -> pd.DataFrame:
 
 
 def clean(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Чистка ДО сплита. Дубли обязательно убрать здесь: если один отзыв
-    попадёт и в train, и в test — лик, метрика на тесте завысится.
-    """
+    """Remove blank and duplicate review texts."""
     before = len(df)
     df = df[df["text"].str.len() > 0]
     df = df.drop_duplicates(subset="text").reset_index(drop=True)
-    print(f"[clean] убрано {before - len(df)} пустых/дублей, осталось {len(df)}")
+    print(
+        f"[clean] removed {before - len(df)} blank/duplicate rows, "
+        f"{len(df)} remain"
+    )
 
     _save_snapshot(df, "data/clean_dataset.csv")
     return df
 
 
 def split(df: pd.DataFrame, seed: int = 42):
-    """
-    Стратифицированный сплит 70/15/15. train_test_split бинарный -> два шага.
-    Стратификация по label_id: доли классов одинаковы во всех трёх частях
-    (важно для малочисленного нейтрального — иначе val-оценка по нему шумная).
-    """
+    """Create stratified train, validation, and test splits."""
     train_df, temp_df = train_test_split(
         df, test_size=0.30, stratify=df["label_id"], random_state=seed
     )
@@ -88,5 +79,5 @@ def split(df: pd.DataFrame, seed: int = 42):
 
 
 def load_clean_split(dataset_dir: str, seed: int = 42):
-    """Полный путь: загрузка -> чистка -> сплит. Возвращает (train, val, test)."""
+    """Load, clean, and split the review corpus."""
     return split(clean(load_reviews(dataset_dir)), seed=seed)

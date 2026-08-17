@@ -1,14 +1,4 @@
-"""
-Оркестратор обучения: сплит -> Trainer -> eval -> артефакты -> MLflow.
-
-Ключевой момент: HuggingFace Trainer по умолчанию берёт ЕДИНЫЙ learning rate
-и НЕВЗВЕШЕННЫЙ лосс. Обе твои техники (differential LR, weighted CE) Trainer
-флагами не поддерживает — их инжектим через сабкласс WeightedTrainer ниже.
-Без этого приёмы просто не применятся, молча.
-
-Запуск (из корня проекта):
-    python -m training.train --dataset_dir C:/Users/Asus/.cache/kagglehub/datasets/mikhailklemin/kinopoisks-movies-reviews/versions/1/dataset --experiment "Kinopoisk Sentiment"
-"""
+"""Train, evaluate, and register the RuBERT sentiment classifier."""
 
 import os
 import json
@@ -37,14 +27,7 @@ from training.metrics import compute_metrics
 
 
 class WeightedTrainer(Trainer):
-    """
-    Инжектит в Trainer две вещи, которые он сам не умеет:
-
-    1. compute_loss -> weighted CrossEntropy (иначе невзвешенный, нейтральный
-       класс недоучивается).
-    2. create_optimizer -> differential LR: энкодер 2e-5 (предобучен, тюним
-       мягко), голова 1e-4 (случайна, учим агрессивнее).
-    """
+    """Trainer with weighted loss and separate encoder/head learning rates."""
 
     def __init__(self, *args, class_weights=None, encoder_lr=2e-5, head_lr=1e-4, **kw):
         super().__init__(*args, **kw)
@@ -61,7 +44,7 @@ class WeightedTrainer(Trainer):
 
     def create_optimizer(self):
         if self.optimizer is None:
-            # разделяем параметры: всё под "classifier" — голова, остальное — энкодер
+
             head, encoder = [], []
             for name, p in self.model.named_parameters():
                 if not p.requires_grad:
@@ -87,22 +70,22 @@ def main(args):
 
     model = build_model().to(device)
     weights = class_weights(train_df["label_id"], device)
-    collator = DataCollatorWithPadding(tokenizer)   # динамический паддинг по батчу
+    collator = DataCollatorWithPadding(tokenizer)
 
     training_args = TrainingArguments(
         output_dir=os.path.join(args.artifacts_dir, "checkpoints"),
         num_train_epochs=args.epochs,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
-        warmup_steps=0.1,                     # warmup: в начале голова случайна
+        warmup_steps=0.1,
         weight_decay=0.01,
         eval_strategy="epoch",
         save_strategy="epoch",
         load_best_model_at_end=True,
-        metric_for_best_model="macro_f1",     # early stopping/выбор по macro-F1
+        metric_for_best_model="macro_f1",
         greater_is_better=True,
         logging_steps=50,
-        report_to="none",                     # MLflow логируем вручную ниже
+        report_to="none",
         seed=args.seed,
     )
 
@@ -110,7 +93,7 @@ def main(args):
     mlflow.set_experiment(args.experiment)
 
     with mlflow.start_run():
-        # === параметры (воспроизводимость) ===
+
         mlflow.log_params({
             "model_name": MODEL_NAME, "max_length": MAX_LENGTH,
             "head_tokens": HEAD_TOKENS, "tail_tokens": TAIL_TOKENS,
@@ -134,28 +117,28 @@ def main(args):
 
         trainer.train()
 
-        # === метрики на val и (один раз) на test ===
+
         val_metrics = trainer.evaluate(val_ds, metric_key_prefix="val")
         test_metrics = trainer.evaluate(test_ds, metric_key_prefix="test")
         mlflow.log_metrics({**val_metrics, **test_metrics})
         print(f"[train] val macro_f1={val_metrics.get('val_macro_f1'):.4f} "
               f"test macro_f1={test_metrics.get('test_macro_f1'):.4f}")
 
-        # === артефакты: модель + токенизатор + label_map ===
+
         artifacts = Path(args.artifacts_dir)
         model_dir = artifacts / "model"
-        trainer.save_model(str(model_dir))          # веса + config
-        tokenizer.save_pretrained(str(model_dir))   # тот же токенизатор в serve
+        trainer.save_model(str(model_dir))
+        tokenizer.save_pretrained(str(model_dir))
 
         (artifacts / "label_map.json").write_text(
             json.dumps(LABEL_MAP, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        # всё едет в MLflow одной версией (label_map версионируется С моделью)
+
         mlflow.log_artifacts(str(model_dir), artifact_path="model")
         mlflow.log_artifact(str(artifacts / "label_map.json"), artifact_path="model")
 
-        # регистрация версии в Model Registry (стадии Staging->Production — отдельно)
+
         run_id = mlflow.active_run().info.run_id
         mlflow.register_model(f"runs:/{run_id}/model", "rubert-sentiment")
         print(f"[train] logged & registered as rubert-sentiment, run={run_id}")
@@ -163,7 +146,7 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--dataset_dir", required=True, help="папка с neg/neu/pos")
+    p.add_argument("--dataset_dir", required=True, help="directory with neg/neu/pos")
     p.add_argument("--artifacts_dir", default="artifacts")
     p.add_argument("--experiment", default="Kinopoisk Sentiment")
     p.add_argument("--mlflow_uri", default="http://localhost:5000")

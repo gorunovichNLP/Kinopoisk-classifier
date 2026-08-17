@@ -35,7 +35,7 @@ JSON_HEADERS = [("content-type", b"application/json"), ("schema-version", b"1")]
 
 
 class KafkaDeliveryError(RuntimeError):
-    """Хотя бы одно сообщение не было подтверждено Kafka."""
+    """Raised when Kafka does not acknowledge every record."""
 
 
 @dataclass(frozen=True)
@@ -53,12 +53,7 @@ class _OutgoingRecord:
 
 
 class InferenceWorker:
-    """Обрабатывает Kafka-сообщения с гарантией at-least-once.
-
-    At-least-once означает: потерять обработанное сообщение мы не должны, но
-    после сбоя можем обработать его повторно. Повтор безопасен благодаря
-    детерминированному prediction_id и будущему ON CONFLICT в PostgreSQL writer.
-    """
+    """Reliable Kafka review consumer and prediction producer."""
 
     def __init__(
         self,
@@ -90,11 +85,7 @@ class InferenceWorker:
             self.consumer.close()
 
     def run_once(self) -> int:
-        """Собирает, публикует и подтверждает один батч.
-
-        Это удобная единица не только рабочего цикла, но и тестирования: один
-        вызов содержит полный путь consume -> inference -> produce -> commit.
-        """
+        """Process one available batch or message."""
 
         records = self._poll_batch()
         if not records:
@@ -103,13 +94,13 @@ class InferenceWorker:
         outgoing = self._build_outgoing(records)
         self._publish_and_wait(outgoing)
 
-        # Commit выполняется только когда Kafka подтвердила все predictions и
-        # DLQ этого батча. Сбой раньше оставит offsets на повторную обработку.
+
+
         self._commit(records)
         return len(records)
 
     def _poll_batch(self) -> list[_InboundRecord]:
-        """Читает до batch_size сообщений, но не ждёт дольше batch_timeout."""
+        """Poll up to one bounded batch of Kafka records."""
 
         records: list[_InboundRecord] = []
         deadline: float | None = None
@@ -130,23 +121,23 @@ class InferenceWorker:
                 raise KafkaException(message.error())
 
             if deadline is None:
-                # Таймер стартует с первого сообщения. Поэтому при маленьком
-                # потоке один отзыв не будет бесконечно ждать полного батча.
+
+
                 deadline = time.monotonic() + self.settings.batch_timeout_ms / 1000
             records.append(self._parse(message))
 
         return records
 
     def _parse(self, message) -> _InboundRecord:
-        """Преобразует Kafka bytes в ReviewEventV1 или сохраняет ошибку для DLQ."""
+        """Parse a Kafka record into a validated event."""
 
         try:
             if message.value() is None:
                 raise ValueError("Kafka message value is null")
 
             event = ReviewEventV1.model_validate_json(message.value())
-            # Одинаковый review_id в key гарантирует попадание событий одного
-            # отзыва в одну partition. Проверяем key, а не доверяем producer-у.
+
+
             key = self._decode_key(message.key())
             if key != event.review_id:
                 raise ValueError(
@@ -165,7 +156,7 @@ class InferenceWorker:
         return str(key)
 
     def _build_outgoing(self, records: list[_InboundRecord]) -> list[_OutgoingRecord]:
-        """Строит predictions для валидных записей и DLQ для невалидных."""
+        """Build prediction or dead-letter records for a batch."""
 
         valid_records = [record for record in records if record.event is not None]
         predictions: list[SentimentPrediction] = []
@@ -236,8 +227,8 @@ class InferenceWorker:
         key = self._as_bytes(message.key())
         payload = self._as_bytes(message.value()) or b""
 
-        # Kafka value может быть любым набором байтов, не обязательно UTF-8.
-        # Base64 сохраняет исходное сообщение без потерь внутри JSON DLQ-event.
+
+
         event = DeadLetterEventV1(
             schema_version=1,
             worker="sentiment-inference",
@@ -263,7 +254,7 @@ class InferenceWorker:
         return str(value).encode("utf-8")
 
     def _publish_and_wait(self, records: list[_OutgoingRecord]) -> None:
-        """Публикует весь батч и ждёт delivery callback от Kafka."""
+        """Publish records and wait for delivery acknowledgements."""
 
         errors = []
 
@@ -272,8 +263,8 @@ class InferenceWorker:
                 errors.append(error)
 
         for record in records:
-            # produce только кладёт record во внутреннюю очередь librdkafka.
-            # Реальное подтверждение приходит позже через on_delivery.
+
+
             self.producer.produce(
                 record.topic,
                 key=record.key,
@@ -283,22 +274,22 @@ class InferenceWorker:
             )
             self.producer.poll(0)
 
-        # flush блокируется до подтверждения всех records или до timeout.
+
         remaining = self.producer.flush(self.settings.delivery_timeout_seconds)
         if remaining or errors:
             details = errors[0] if errors else f"{remaining} undelivered message(s)"
             raise KafkaDeliveryError(f"Kafka delivery failed: {details}")
 
     def _commit(self, records: list[_InboundRecord]) -> None:
-        """Коммитит следующую позицию после последнего сообщения partition."""
+        """Commit the next offset for every processed partition."""
 
         highest_offsets: dict[tuple[str, int], int] = {}
         for record in records:
             message = record.message
             partition = (message.topic(), message.partition())
 
-            # Kafka commit хранит offset СЛЕДУЮЩЕГО сообщения. Если успешно
-            # обработан offset=7, сохраняем 8. После рестарта consumer начнёт с 8.
+
+
             highest_offsets[partition] = max(
                 highest_offsets.get(partition, 0),
                 message.offset() + 1,

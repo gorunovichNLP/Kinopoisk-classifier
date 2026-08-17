@@ -1,10 +1,4 @@
-"""Загрузка модели из MinIO и пакетный sentiment-инференс.
-
-MLflow Registry хранит метаданные версии, а файлы модели лежат в MinIO.
-Transformers не читает веса напрямую из object storage, поэтому MLflow сначала
-скачивает их во временный cache. Этот cache — техническая деталь, а не источник
-модели и не локальный fallback.
-"""
+"""Load an immutable model version and run batched sentiment inference."""
 
 from __future__ import annotations
 
@@ -47,7 +41,7 @@ LABEL_MAP_ADAPTER = TypeAdapter(dict[str, int])
 
 
 class ModelArtifactError(RuntimeError):
-    """Артефакт модели неполон или несовместим с runtime."""
+    """Raised when a serving artifact is missing or incompatible."""
 
 
 class _DownloadedModel(NamedTuple):
@@ -56,13 +50,13 @@ class _DownloadedModel(NamedTuple):
 
 
 def _ensure_minio_artifact_store(artifact_store_uri: str) -> None:
-    """Запрещает случайно запустить production-runtime на локальных весах."""
+    """Reject unsupported model artifact stores."""
 
     scheme = urlparse(artifact_store_uri).scheme.lower()
     is_windows_path = WINDOWS_DRIVE_PATH.match(artifact_store_uri) is not None
 
-    # В текущем compose MinIO скрыт за MLflow proxy (mlflow-artifacts:/).
-    # s3:// оставляем для возможного прямого подключения к тому же MinIO.
+
+
     if scheme not in ALLOWED_ARTIFACT_SCHEMES or is_windows_path:
         raise ModelArtifactError(
             f"Unsupported artifact store URI {artifact_store_uri!r}. "
@@ -75,11 +69,11 @@ def _download_model_version(
     model_name: str,
     model_version: str,
 ) -> _DownloadedModel:
-    """Находит точную Registry-версию и скачивает её артефакт из MinIO."""
+    """Resolve and download one immutable registry version."""
 
-    # Импорт ленивый: import kinopoisk_classifier.inference.runtime не должен
-    # поднимать весь MLflow SDK.
-    # Он нужен только один раз во время старта worker-а.
+
+
+
     import mlflow
     from mlflow.tracking import MlflowClient
 
@@ -107,15 +101,15 @@ def _download_model_version(
 
     registry_uri = f"models:/{model_name}/{model_version}"
 
-    # Версию мы уже однозначно нашли через HTTP Registry выше. Теперь скачиваем
-    # source именно этой версии. Это всё ещё путь через MLflow в MinIO, а не
-    # локальный fallback: runs:/ разрешается относительно tracking_uri, а сам
-    # run выше проверен на artifact_uri с разрешённой MinIO-схемой.
+
+
+
+
     #
-    # Если повторно передать models:/, некоторые версии MLflow SDK пытаются
-    # разрешить его через глобальный (и часто локальный SQLite) Registry,
-    # несмотря на registry_uri аргумент. Source уже найденной версии исключает
-    # эту лишнюю и неоднозначную вторую операцию поиска.
+
+
+
+
     cache_path = mlflow.artifacts.download_artifacts(
         artifact_uri=registered.source,
         tracking_uri=tracking_uri,
@@ -132,7 +126,7 @@ def _download_model_version(
 
 
 def _validate_artifact(model_dir: Path) -> tuple[dict[str, int], DecisionConfig]:
-    """Проверяет serving-контракт до загрузки 700+ MB весов в память."""
+    """Validate the serving artifact before loading its weights."""
 
     missing = [
         filename
@@ -171,7 +165,7 @@ def _validate_artifact(model_dir: Path) -> tuple[dict[str, int], DecisionConfig]
 
 
 def _validate_model_config(model) -> None:
-    """Сверяет label contract внутри Transformers config с общим контрактом."""
+    """Validate the model label configuration."""
 
     try:
         id2label = {
@@ -195,7 +189,7 @@ def _validate_model_config(model) -> None:
 
 
 class ModelRuntime:
-    """Один загруженный экземпляр модели с пакетным API инференса."""
+    """Loaded model instance with a batched inference API."""
 
     def __init__(
         self,
@@ -222,8 +216,8 @@ class ModelRuntime:
         self.device = device
         self.batch_size = batch_size
 
-        # Padding делается до максимальной длины внутри текущего батча, а не до
-        # 512 для каждого отзыва. Это заметно экономит память и время модели.
+
+
         self._collator = collator or DataCollatorWithPadding(tokenizer)
 
     @classmethod
@@ -236,15 +230,15 @@ class ModelRuntime:
         device: str | None = None,
         batch_size: int = 16,
     ) -> "ModelRuntime":
-        """Загружает точную версию модели из MinIO через MLflow Registry."""
+        """Construct a runtime from an immutable registry version."""
 
         if not tracking_uri.strip():
             raise ValueError("tracking_uri must be non-blank")
         if not model_name.strip():
             raise ValueError("model_name must be non-blank")
 
-        # latest/alias запрещены: после рестарта worker не должен незаметно
-        # начать обслуживать другую модель.
+
+
         version = str(model_version)
         if not version.isdigit() or int(version) <= 0:
             raise ValueError("model_version must be a positive Registry version number")
@@ -252,8 +246,8 @@ class ModelRuntime:
         downloaded = _download_model_version(tracking_uri, model_name, version)
         _, decision_config = _validate_artifact(downloaded.path)
 
-        # local_files_only не означает локальный источник модели: файлы только
-        # что скачаны MLflow из MinIO и теперь читаются без обращений в HF Hub.
+
+
         tokenizer = AutoTokenizer.from_pretrained(
             downloaded.path,
             local_files_only=True,
@@ -275,7 +269,7 @@ class ModelRuntime:
         )
 
     def predict_batch(self, texts: Sequence[str]) -> list[SentimentPrediction]:
-        """Предсказывает sentiment для последовательности отзывов."""
+        """Predict sentiment for a sequence of review texts."""
 
         if isinstance(texts, (str, bytes)):
             raise TypeError("texts must be a sequence of strings, not a single string")
@@ -292,7 +286,7 @@ class ModelRuntime:
         return self._decode_logits(logits, expected_rows=len(items))
 
     def _predict_logits(self, texts: list[str]) -> np.ndarray:
-        """Кодирует тексты батчами и собирает сырые выходы модели."""
+        """Encode texts in batches and collect model logits."""
 
         parts: list[np.ndarray] = []
 
@@ -300,8 +294,8 @@ class ModelRuntime:
             for start in range(0, len(texts), self.batch_size):
                 text_batch = texts[start : start + self.batch_size]
 
-                # Используем общую train/serve-функцию head+tail. Дублировать
-                # токенизацию здесь нельзя: это породит train/serve skew.
+
+
                 encoded = [
                     encode_head_tail(text, self.tokenizer) for text in text_batch
                 ]
@@ -321,7 +315,7 @@ class ModelRuntime:
         *,
         expected_rows: int,
     ) -> list[SentimentPrediction]:
-        """Применяет decision strategy и превращает logits в результат API."""
+        """Convert logits into validated sentiment predictions."""
 
         expected_shape = (expected_rows, NUM_LABELS)
         if logits.shape != expected_shape:
@@ -331,8 +325,8 @@ class ModelRuntime:
 
         label_ids = apply_decision(logits, self._decision_payload)
 
-        # Decision strategy выбирает класс, а temperature scaling отвечает за
-        # калиброванные confidence/probabilities. Для argmax класс от T не меняется.
+
+
         temperature = self.decision_config.temperature
         probability_rows = softmax(logits / temperature)
 

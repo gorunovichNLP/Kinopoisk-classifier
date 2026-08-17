@@ -1,4 +1,4 @@
-"""Внутренние MongoDB-документы Review Producer."""
+"""Internal schemas used by the review producer."""
 
 from typing import Literal
 
@@ -12,12 +12,7 @@ from kinopoisk_classifier.shared.schemas import (
 
 
 class ReviewProducerCheckpoint(BaseModel):
-    """Последний review, полностью подтверждённый Kafka.
-
-    Отсутствие документа означает первый запуск и чтение с начала коллекции.
-    Наличие документа означает, что все отзывы до ``last_review_id``
-    включительно уже получили Kafka delivery acknowledgement.
-    """
+    """Validated persistent cursor for the review producer."""
 
     model_config = ConfigDict(
         extra="forbid",

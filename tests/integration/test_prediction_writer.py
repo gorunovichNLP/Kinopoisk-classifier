@@ -1,12 +1,4 @@
-"""Интеграционный тест PredictionWriter с настоящими Kafka и PostgreSQL.
-
-Тестовые паттерны:
-- Component Integration Test: используются реальные broker и database.
-- Test Isolation: уникальные prediction_id и Kafka consumer group.
-- Arrange–Act–Assert: публикуем событие, запускаем Writer и проверяем эффекты.
-
-GoF-паттерны непосредственно в тестовом файле не используются.
-"""
+"""Integration tests for the prediction writer service."""
 
 import os
 import time
@@ -76,7 +68,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
 
         base_settings = PredictionWriterSettings(_env_file=None)
 
-        # Временный topic полностью изолирует main smoke-тест от старых records.
+
         admin = AdminClient({"bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS})
         create_future = admin.create_topics(
             [NewTopic(topic, num_partitions=1, replication_factor=1)]
@@ -91,7 +83,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             connect_timeout=base_settings.postgres_connect_timeout_seconds,
         )
 
-        # main() сам создаёт settings, поэтому настраиваем его через environment.
+
         environment = {
             "PREDICTION_WRITER_KAFKA_BOOTSTRAP_SERVERS": KAFKA_BOOTSTRAP_SERVERS,
             "PREDICTION_WRITER_KAFKA_CLIENT_ID": f"writer-main-smoke-{suffix}",
@@ -108,7 +100,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
 
         def run_main():
             try:
-                # Вызываем настоящую точку входа, а не собираем объекты вручную.
+
                 main(stop_event)
             except BaseException as error:
                 thread_errors.append(error)
@@ -116,8 +108,8 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
         main_thread = Thread(target=run_main, daemon=True)
 
         try:
-            # Публикуем до запуска main: уникальный пустой topic и earliest
-            # гарантируют, что Writer прочитает именно это сообщение.
+
+
             input_producer.produce(
                 topic,
                 key=review_id.encode("utf-8"),
@@ -125,7 +117,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(input_producer.flush(10.0), 0)
 
-            # Переменные остаются установленными, пока main работает в Thread.
+
             with patch.dict(os.environ, environment, clear=False):
                 main_thread.start()
 
@@ -152,7 +144,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
                 else:
                     self.fail("PredictionWriter main did not save the event in time")
 
-                # Даём run() завершиться и main() выполнить finally.
+
                 stop_event.set()
                 main_thread.join(timeout=5.0)
 
@@ -173,7 +165,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             verification_connection.commit()
             verification_connection.close()
 
-            # Удаляем только уникальный Kafka topic этого smoke-теста.
+
             delete_future = admin.delete_topics([topic])[topic]
             delete_future.result(timeout=10.0)
 
@@ -211,8 +203,8 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
         settings = PredictionWriterSettings(
             kafka_bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
             kafka_group_id=f"prediction-writer-integration-{suffix}",
-            # Тесту не нужны старые records общего topic. Production default
-            # остаётся earliest и при первом запуске обработает всю историю.
+
+
             auto_offset_reset="latest",
             poll_timeout_seconds=1.0,
             _env_file=None,
@@ -237,7 +229,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             connect_timeout=settings.postgres_connect_timeout_seconds,
         )
 
-        # run() блокирует поток, поэтому запускаем его в фоне.
+
         stop_event = Event()
         thread_errors = []
 
@@ -245,15 +237,15 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             try:
                 writer.run(stop_event)
             except BaseException as error:
-                # Исключение из Thread не падает в основном тестовом потоке само.
+
                 thread_errors.append(error)
 
         writer_thread = Thread(target=run_writer, daemon=True)
 
         try:
-            # Сначала poll позволяет Kafka назначить partition новой group.
-            # После assignment позиция latest уже зафиксирована; теперь новое
-            # тестовое сообщение не будет случайно пропущено.
+
+
+
             assignment_deadline = time.monotonic() + 10.0
             while (
                 not writer.consumer.assignment()
@@ -272,10 +264,10 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             self.assertEqual(delivery_errors, [])
             self.assertEqual(len(delivered_messages), 1)
 
-            # Запускаем настоящий бесконечный цикл после публикации сообщения.
+
             writer_thread.start()
 
-            # Ждём видимую закоммиченную строку в отдельном соединении.
+
             row = None
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
@@ -297,8 +289,8 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             else:
                 self.fail("PredictionWriter did not save the event in time")
 
-            # Просим цикл остановиться. Если Writer уже начал следующий poll,
-            # join подождёт не дольше poll_timeout_seconds плюс небольшой запас.
+
+
             stop_event.set()
             writer_thread.join(timeout=5.0)
 
@@ -306,7 +298,7 @@ class PredictionWriterIntegrationTest(unittest.TestCase):
             self.assertFalse(writer_thread.is_alive())
             self.assertEqual(thread_errors, [])
 
-            # Delivery callback сообщает точные partition и offset сообщения.
+
             delivered = delivered_messages[0]
             committed = writer.consumer.committed(
                 [TopicPartition(settings.input_topic, delivered.partition())],

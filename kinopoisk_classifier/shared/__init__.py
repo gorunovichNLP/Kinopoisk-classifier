@@ -1,1 +1,1 @@
-"""Общие train/serve-контракты, кодирование и decision logic."""
+"""Shared training and serving contracts."""

@@ -9,4 +9,4 @@ client.create_model_version(
     source="runs:/c99b205238c24a378ad8270c54409487/model",
     run_id="c99b205238c24a378ad8270c54409487",
 )
-print("версия создана")
+print("Model version created")

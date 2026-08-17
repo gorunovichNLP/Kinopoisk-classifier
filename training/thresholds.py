@@ -1,14 +1,4 @@
-"""
-Калибровка температуры + подбор решающей стратегии.
-
-Сравниваются три стратегии:
-  A "argmax"     — калибровка + argmax (базовая планка)
-  B "class_bias" — сдвиг логитов по классам (мало параметров, устойчиво)
-  C "thresholds" — per-class пороги + разрешение конфликтов (гибко, риск переподгонки)
-
-Запуск:
-    python -m training.thresholds --dataset_dir C:/Users/Asus/.cache/kagglehub/datasets/mikhailklemin/kinopoisks-movies-reviews/versions/1/dataset --model_dir artifacts_from_gpu/model --out artifacts_from_gpu/thresholds.json
-"""
+"""Calibrate logits and select the final decision strategy."""
 
 import json
 import argparse
@@ -28,7 +18,7 @@ from training.data import load_clean_split
 
 
 def collect_logits(df, model, tokenizer, device, batch_size=32):
-    """Прогоняет модель по df, возвращает (logits[N,C], labels[N]). Кодировка — та же (head+tail)."""
+    """Collect model logits and labels for a dataframe."""
     ds = ReviewDataset(df["text"], df["label_id"], tokenizer)
     collator = DataCollatorWithPadding(tokenizer)
     loader = DataLoader(ds, batch_size=batch_size, collate_fn=collator)
@@ -51,9 +41,9 @@ def fit_temperature(val_logits, val_labels) -> float:
     labels = torch.tensor(val_labels, dtype=torch.long)
     T = torch.nn.Parameter(torch.ones(1))
     opt = torch.optim.LBFGS([T], lr=0.05, max_iter=100)
-    ## Оптимизатор Limited-memory Broyden–Fletcher–Goldfarb–Shanno
-    ## метод второго порядка: аппроксимирует ещё и кривизну функции (как быстро меняется наклон)
-    ## Для подбора одного параметра T это идеально
+
+
+
 
     def closure():
         opt.zero_grad()
@@ -71,12 +61,12 @@ def macro_f1(logits, labels, config) -> float:
 
 
 def search_class_bias(val_logits, val_labels, T) -> dict:
-    """Сетка по сдвигам логитов. Якорь pos=0 (для argmax важны относительные сдвиги)."""
+    """Find the best per-class logit bias on validation data."""
     grid = np.arange(-2.0, 2.01, 0.25)
     best_f1, best_bias = -1.0, [0.0, 0.0, 0.0]
     for b_neg in grid:
         for b_neu in grid:
-            bias = [b_neg, b_neu, 0.0]   # порядок: neg, neu, pos
+            bias = [b_neg, b_neu, 0.0]
             cfg = {"temperature": T, "strategy": "class_bias", "params": {"bias": bias}}
             f = macro_f1(val_logits, val_labels, cfg)
             if f > best_f1:
@@ -86,7 +76,7 @@ def search_class_bias(val_logits, val_labels, T) -> dict:
 
 
 def search_thresholds(val_logits, val_labels, T) -> dict:
-    """Сетка по per-class порогам на калиброванных вероятностях."""
+    """Find the best per-class probability thresholds."""
     grid = np.arange(0.20, 0.81, 0.05)
     best_f1, best_t = -1.0, [0.5, 0.5, 0.5]
     for t_neg in grid:
@@ -108,18 +98,18 @@ def main(args):
     tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
     model = AutoModelForSequenceClassification.from_pretrained(args.model_dir).to(device)
 
-    # тот же сплит (seed=42) -> тот же val/test, что на обучении
+
     _, val_df, test_df = load_clean_split(args.dataset_dir, seed=args.seed)
 
-    print("[thresholds] прогон модели по val/test...")
+    print("[thresholds] running the model on validation and test data...")
     val_logits, val_labels = collect_logits(val_df, model, tokenizer, device, args.batch_size)
     test_logits, test_labels = collect_logits(test_df, model, tokenizer, device, args.batch_size)
 
-    # === калибровка на val ===
+
     T = fit_temperature(val_logits, val_labels)
     print(f"[thresholds] temperature = {T:.4f}")
 
-    # === три стратегии на VAL ===
+
     cfg_A = {"temperature": T, "strategy": "argmax", "params": {}}
     f_A = macro_f1(val_logits, val_labels, cfg_A)
     cfg_A["val_macro_f1"] = f_A
@@ -127,28 +117,28 @@ def main(args):
     cfg_B = search_class_bias(val_logits, val_labels, T)
     cfg_C = search_thresholds(val_logits, val_labels, T)
 
-    print("\n=== VAL (подбор) ===")
-    print(f"A argmax+калибровка : {cfg_A['val_macro_f1']:.4f}")
+    print("\n=== VALIDATION (selection) ===")
+    print(f"A argmax+calibration : {cfg_A['val_macro_f1']:.4f}")
     print(f"B class_bias        : {cfg_B['val_macro_f1']:.4f}  bias={cfg_B['params']['bias']}")
     print(f"C thresholds        : {cfg_C['val_macro_f1']:.4f}  thr={cfg_C['params']['thresholds']}")
 
-    # === выбор лучшей ПО VAL ===
-    best = max([cfg_A, cfg_B, cfg_C], key=lambda c: c["val_macro_f1"])
-    print(f"\nвыбрана: {best['strategy']} (val macro-F1 = {best['val_macro_f1']:.4f})")
 
-    # === честная оценка на TEST (один раз) ===
-    baseline_test = f1_score(test_labels, test_logits.argmax(axis=1), average="macro")  # сырой argmax без калибровки
+    best = max([cfg_A, cfg_B, cfg_C], key=lambda c: c["val_macro_f1"])
+    print(f"\nselected: {best['strategy']} (val macro-F1 = {best['val_macro_f1']:.4f})")
+
+
+    baseline_test = f1_score(test_labels, test_logits.argmax(axis=1), average="macro")
     winner_test = macro_f1(test_logits, test_labels, best)
 
-    print("\n=== TEST (честно, один раз) ===")
-    print(f"базовый argmax (без калибровки): {baseline_test:.4f}")
-    print(f"выбранная стратегия            : {winner_test:.4f}")
-    print(f"прирост                        : {winner_test - baseline_test:+.4f}")
-    print("\nper-class на test (выбранная стратегия):")
+    print("\n=== TEST (single unbiased evaluation) ===")
+    print(f"baseline argmax (uncalibrated): {baseline_test:.4f}")
+    print(f"selected strategy            : {winner_test:.4f}")
+    print(f"gain                         : {winner_test - baseline_test:+.4f}")
+    print("\nper-class test metrics for the selected strategy:")
     print(classification_report(test_labels, apply_decision(test_logits, best),
                                 target_names=[ID2LABEL[i] for i in range(NUM_LABELS)], digits=3))
 
-    # === сохранение финального конфига ===
+
     out = {
         "temperature": best["temperature"],
         "strategy": best["strategy"],
@@ -160,13 +150,17 @@ def main(args):
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
-    print(f"\n[thresholds] сохранено -> {args.out}")
+    print(f"\n[thresholds] saved -> {args.out}")
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--model_dir", default="artifacts/model")
-    p.add_argument("--dataset_dir", required=True, help="папка с neg/neu/pos (тот же датасет)")
+    p.add_argument(
+        "--dataset_dir",
+        required=True,
+        help="directory with neg/neu/pos from the same dataset",
+    )
     p.add_argument("--out", default="artifacts/thresholds.json")
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--seed", type=int, default=42)

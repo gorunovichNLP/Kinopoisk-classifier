@@ -1,11 +1,4 @@
-"""Интеграционный тест InferenceWorker с настоящим Kafka broker.
-
-По умолчанию тест пропущен, чтобы обычные unit-тесты не требовали Docker.
-Запуск:
-
-    $env:RUN_KAFKA_INTEGRATION="1"
-    python -m unittest tests.integration.test_kafka_worker -v
-"""
+"""Integration tests for the Kafka inference worker."""
 
 import os
 import time
@@ -30,7 +23,7 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 
 
 class _FakeRuntime:
-    """Заменяет тяжёлый BERT: этот тест проверяет именно Kafka-контур."""
+    """_FakeRuntime implementation."""
 
     metadata = LoadedModelMetadata(
         name="rubert-sentiment",
@@ -58,14 +51,14 @@ class _FakeRuntime:
 )
 class KafkaWorkerIntegrationTest(unittest.TestCase):
     def test_review_is_consumed_and_prediction_is_published(self):
-        # 24 hex-символа совместимы со строковым представлением Mongo ObjectId.
+
         review_id = uuid.uuid4().hex[:24]
         group_suffix = uuid.uuid4().hex
         review = ReviewEventV1(
             schema_version=1,
             event_id=make_review_event_id(review_id),
             review_id=review_id,
-            text="Интеграционный отзыв",
+            text="Integration review",
             emitted_at=datetime.now(timezone.utc),
         )
 
@@ -96,8 +89,8 @@ class KafkaWorkerIntegrationTest(unittest.TestCase):
         )
 
         try:
-            # run() подписывается сам, но в тесте используем один run_once(),
-            # поэтому явно подписываем внутренний consumer worker-а.
+
+
             worker.consumer.subscribe([settings.input_topic])
             output_consumer.subscribe([settings.output_topic])
 
@@ -108,8 +101,8 @@ class KafkaWorkerIntegrationTest(unittest.TestCase):
             )
             self.assertEqual(input_producer.flush(10.0), 0)
 
-            # Первые poll могут уйти на group assignment, поэтому даём worker-у
-            # несколько попыток, но ограничиваем весь тест deadline-ом.
+
+
             deadline = time.monotonic() + 20.0
             while time.monotonic() < deadline:
                 if worker.run_once() > 0:

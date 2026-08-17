@@ -1,1 +1,1 @@
-"""Kafka Prediction Writer: сохраняет историю предсказаний в PostgreSQL."""
+"""Kafka-to-PostgreSQL prediction writer service."""

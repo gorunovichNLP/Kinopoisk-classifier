@@ -1,12 +1,4 @@
-"""Интеграционный тест repository с настоящим PostgreSQL.
-
-Тестовые паттерны:
-- Component Integration Test: repository работает с реальной базой данных.
-- Test Isolation: prediction_id уникален, а тест удаляет только свою строку.
-- Arrange–Act–Assert: создаём событие, сохраняем и проверяем SQL-результат.
-
-GoF-паттерны непосредственно в тестовом файле не используются.
-"""
+"""Integration tests for PostgreSQL prediction persistence."""
 
 import os
 import unittest
@@ -34,13 +26,13 @@ class PostgresPredictionRepositoryIntegrationTest(unittest.TestCase):
     def test_saves_prediction_and_ignores_duplicate(self):
         """Saves one prediction and keeps one row after a duplicate."""
 
-        # uuid даёт уникальный review для каждого запуска теста.
+
         review_id = uuid.uuid4().hex[:24]
         source_event_id = make_review_event_id(review_id)
         model_name = "integration-model"
         model_version = uuid.uuid4().hex
 
-        # prediction_id детерминирован теми же полями, что и в рабочем pipeline.
+
         prediction_id = make_prediction_id(
             source_event_id,
             model_name,
@@ -69,7 +61,7 @@ class PostgresPredictionRepositoryIntegrationTest(unittest.TestCase):
         settings = PredictionWriterSettings(_env_file=None)
         repository = PostgresPredictionRepository(settings)
 
-        # Отдельное соединение проверяет только уже закоммиченные данные.
+
         verification_connection = psycopg.connect(
             str(settings.postgres_dsn),
             connect_timeout=settings.postgres_connect_timeout_seconds,
@@ -102,7 +94,7 @@ class PostgresPredictionRepositoryIntegrationTest(unittest.TestCase):
                 ("pos", model_name, model_version, 1),
             )
         finally:
-            # Удаляем только строку этого теста и не трогаем историю приложения.
+
             with verification_connection.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM sentiment.prediction_history "

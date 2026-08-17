@@ -1,48 +1,24 @@
-r"""Сквозной интеграционный тест всего inference-контура.
+"""End-to-end integration test for the complete inference pipeline."""
 
-Проверяем один настоящий отзыв по полному маршруту:
 
-    MongoDB -> ReviewProducer -> Kafka reviews -> InferenceWorker
-            -> модель из MLflow/MinIO -> Kafka predictions
-            -> PredictionWriter -> PostgreSQL
-
-Тестовые паттерны:
-- End-to-End Integration Test: вместе работают все настоящие компоненты контура.
-- Arrange-Act-Assert: подготавливаем отзыв, проводим его по этапам и проверяем
-  checkpoint вместе с итоговой строкой PostgreSQL.
-- Test Isolation: каждый запуск получает уникальные MongoDB-коллекции и Kafka
-  consumer groups, поэтому параллельные и предыдущие запуски не смешиваются.
-
-GoF-паттерны непосредственно в тестовом файле не реализуются.
-
-Тест тяжёлый и выключен по умолчанию. Перед запуском нужно поднять Docker
-Compose и указать существующую версию модели в MLflow Registry:
-
-    docker compose -f infra/docker/docker-compose.yml up -d
-    $env:RUN_REAL_MODEL_INTEGRATION="1"
-    $env:INFERENCE_MODEL_VERSION="2"
-    venv\Scripts\python -m unittest tests.integration.test_full_inference_pipeline -v
-"""
-
-# csv нужен, чтобы взять один настоящий текст из обучающего датасета.
 import csv
-# os читает флаги запуска и адреса локальной инфраструктуры.
+
 import os
-# time используется для понятных ограниченных циклов ожидания Kafka.
+
 import time
-# unittest предоставляет проверки и возможность пропустить тяжёлый тест.
+
 import unittest
-# uuid создаёт уникальные имена коллекций и consumer groups для каждого запуска.
+
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-# ObjectId — тот же тип идентификатора, который используют реальные отзывы.
+
 from bson import ObjectId
-# KafkaException сообщает о настоящей ошибке broker-а во время poll().
-# TopicPartition нужен, чтобы начать тест строго с текущего конца topic.
+
+
 from confluent_kafka import KafkaException, TopicPartition
-# MongoClient подготавливает исходный отзыв и удаляет тестовые коллекции.
+
 from pymongo import MongoClient
 
 from kinopoisk_classifier.inference.config import InferenceSettings
@@ -66,33 +42,33 @@ from kinopoisk_classifier.shared.schemas import (
 )
 
 
-# Корень проекта нужен для стандартного пути к датасету.
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# Все сервисы, запущенные с Windows, обращаются к Kafka через host listener.
+
 KAFKA_BOOTSTRAP_SERVERS = os.getenv(
     "INFERENCE_KAFKA_BOOTSTRAP_SERVERS",
     "localhost:9092",
 )
 
-# MLflow хранит Registry-метаданные, а артефакты модели отдаёт из MinIO.
+
 MLFLOW_TRACKING_URI = os.getenv(
     "INFERENCE_MLFLOW_TRACKING_URI",
     "http://localhost:5000",
 )
 MODEL_NAME = os.getenv("INFERENCE_MODEL_NAME", "rubert-sentiment")
 
-# Версию нельзя выбирать неявно: тест должен быть воспроизводимым.
+
 MODEL_VERSION = os.getenv("INFERENCE_MODEL_VERSION")
 
-# При необходимости путь можно заменить переменной REAL_REVIEW_CSV.
+
 REVIEW_CSV = Path(
     os.getenv("REAL_REVIEW_CSV", PROJECT_ROOT / "data" / "clean_dataset.csv")
 )
 
 
 def _read_one_real_review(csv_path: Path) -> str:
-    """Читает первый непустой текст, не загружая весь CSV в память."""
+    """Read one non-blank review from a CSV dataset."""
 
     if not csv_path.is_file():
         raise FileNotFoundError(
@@ -115,26 +91,26 @@ def _read_one_real_review(csv_path: Path) -> str:
 )
 class FullInferencePipelineIntegrationTest(unittest.TestCase):
     def test_review_travels_from_mongodb_to_postgresql(self):
-        """Проводит один отзыв через все настоящие границы приложения."""
+        """Perform the test review travels from mongodb to postgresql operation."""
 
-        # Декоратор не запустит тест без версии. assert дополнительно объясняет
-        # Python и IDE, что ниже MODEL_VERSION уже точно является строкой.
+
+
         assert MODEL_VERSION is not None
 
-        # Один suffix изолирует все временные имена этого запуска.
+
         suffix = uuid.uuid4().hex
         reviews_collection = f"reviews_full_pipeline_{suffix}"
         checkpoints_collection = f"checkpoints_full_pipeline_{suffix}"
         checkpoint_id = f"full-pipeline-{suffix}"
 
-        # ObjectId заранее создаём в тесте, чтобы затем проследить один и тот же
-        # review_id через MongoDB, Kafka и PostgreSQL.
+
+
         review_object_id = ObjectId()
         review_id = str(review_object_id)
         movie_id = f"integration-movie-{suffix}"
         source_created_at = datetime.now(timezone.utc)
 
-        # _env_file=None защищает тест от случайных значений из .env.local.
+
         review_settings = ReviewProducerSettings(
             reviews_collection=reviews_collection,
             checkpoints_collection=checkpoints_collection,
@@ -169,8 +145,8 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
             _env_file=None,
         )
 
-        # Этот общий MongoClient принадлежит тесту. Reader и checkpoint store
-        # получают его через Dependency Injection и сами его не закрывают.
+
+
         mongo_client = MongoClient(
             str(review_settings.mongo_uri),
             tz_aware=True,
@@ -180,22 +156,22 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
         )
         database = mongo_client[review_settings.mongo_database]
 
-        # Переменные объявлены до try, чтобы finally был безопасен даже при
-        # ошибке во время создания одного из следующих компонентов.
+
+
         publisher = None
         inference_worker = None
         repository = None
         prediction_writer = None
 
         try:
-            # Сначала проверяем дешёвые подключения к базам. Если Docker не
-            # поднят, тест не будет зря несколько минут загружать модель.
+
+
             mongo_client.admin.command("ping")
             repository = PostgresPredictionRepository(writer_settings)
             repository.ping()
 
-            # Настоящая модель загружается через MLflow Registry. Сам MLflow
-            # получает её файлы из настроенного MinIO artifact store.
+
+
             runtime = ModelRuntime.from_registry(
                 tracking_uri=MLFLOW_TRACKING_URI,
                 model_name=MODEL_NAME,
@@ -210,8 +186,8 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
                 "The real runtime must load its artifact from MinIO",
             )
 
-            # Собираем три настоящих application service. В отличие от main(),
-            # тест вызывает run_once(), чтобы явно видеть каждый этап pipeline.
+
+
             reader = MongoReviewReader(review_settings, client=mongo_client)
             checkpoint_store = MongoCheckpointStore(
                 review_settings,
@@ -230,10 +206,10 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
 
             prediction_writer = PredictionWriter(writer_settings, repository)
 
-            # subscribe() только объявляет интерес к topic. Реальное назначение
-            # partitions происходит во время poll(), поэтому сначала ждём его.
-            # Одновременно ставим оба consumer-а на текущий конец topic: старые
-            # тестовые события нам не нужны, а новые после этой строки не потеряются.
+
+
+
+
             self._start_from_current_topic_end(
                 inference_worker.consumer,
                 consumer_name="inference consumer",
@@ -243,8 +219,8 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
                 consumer_name="prediction writer consumer",
             )
 
-            # Только после готовности обоих Kafka consumer-ов создаём источник.
-            # Отзыв неизменяем: тест больше не обновляет этот документ.
+
+
             database[reviews_collection].insert_one(
                 {
                     "_id": review_object_id,
@@ -254,15 +230,15 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
                 }
             )
 
-            # Этап 1: MongoDB -> Kafka reviews -> MongoDB checkpoint.
+
             self.assertEqual(review_producer.run_once(), 1)
             checkpoint = checkpoint_store.load()
             self.assertIsNotNone(checkpoint)
             self.assertEqual(checkpoint.last_review_id, review_id)
 
-            # Этап 2: Kafka reviews -> настоящая модель -> Kafka predictions.
-            # На слабом компьютере один predict может выполняться долго, поэтому
-            # на получение входного события даём пять минут, как в отдельном
+
+
+
             # real-model integration test.
             inference_deadline = time.monotonic() + 300.0
             while time.monotonic() < inference_deadline:
@@ -271,8 +247,8 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
             else:
                 self.fail("InferenceWorker did not process the review in time")
 
-            # Этап 3: Kafka predictions -> PostgreSQL. Здесь модель уже считать
-            # не должна, поэтому одной минуты достаточно для доставки Kafka.
+
+
             writer_deadline = time.monotonic() + 60.0
             while time.monotonic() < writer_deadline:
                 if prediction_writer.run_once() > 0:
@@ -280,8 +256,8 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
             else:
                 self.fail("PredictionWriter did not save the prediction in time")
 
-            # InferenceWorker строит один и тот же prediction_id из события и
-            # версии модели. По этому стабильному ключу проверяем итоговую строку.
+
+
             expected_prediction_id = make_prediction_id(
                 make_review_event_id(review_id),
                 runtime.metadata.name,
@@ -309,8 +285,8 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
                 saved_prediction = cursor.fetchone()
             repository.connection.commit()
 
-            # PostgreSQL constraints уже проверили вероятности и соответствие
-            # label/sentiment. Здесь проверяем сквозное сохранение идентичности.
+
+
             self.assertIsNotNone(saved_prediction)
             self.assertEqual(saved_prediction[0], make_review_event_id(review_id))
             self.assertEqual(saved_prediction[1], review_id)
@@ -323,8 +299,8 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
             self.assertEqual(saved_prediction[7], runtime.metadata.version)
             self.assertEqual(saved_prediction[8], runtime.metadata.run_id)
         finally:
-            # Удаляем только строку этого уникального отзыва. История других
-            # ручных запусков и тестов остаётся нетронутой.
+
+
             if repository is not None:
                 try:
                     with repository.connection.cursor() as cursor:
@@ -337,7 +313,7 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
                 except Exception:
                     repository.connection.rollback()
 
-            # Закрываем ресурсы в обратном порядке их использования.
+
             if prediction_writer is not None:
                 prediction_writer.close()
             if repository is not None:
@@ -348,17 +324,17 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
             if publisher is not None:
                 publisher.producer.flush(5.0)
 
-            # Коллекции имеют уникальные имена и созданы только этим тестом.
+
             database.drop_collection(reviews_collection)
             database.drop_collection(checkpoints_collection)
             mongo_client.close()
 
     def _start_from_current_topic_end(self, consumer, consumer_name):
-        """Дожидается partitions и пропускает историю прошлых запусков."""
+        """Position a test consumer at the current topic end."""
 
         assignment_deadline = time.monotonic() + 30.0
         while time.monotonic() < assignment_deadline:
-            # poll запускает присоединение consumer-а к группе и assignment.
+
             message = consumer.poll(0.2)
             if message is not None and message.error():
                 raise KafkaException(message.error())
@@ -367,9 +343,9 @@ class FullInferencePipelineIntegrationTest(unittest.TestCase):
             if not assignment:
                 continue
 
-            # high watermark — offset после последнего существующего сообщения.
-            # seek(high) оставляет старую историю позади, но все новые records,
-            # опубликованные после этого места, consumer уже увидит.
+
+
+
             for partition in assignment:
                 _, high_watermark = consumer.get_watermark_offsets(
                     partition,

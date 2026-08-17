@@ -1,4 +1,4 @@
-"""Интеграционный тест чтения batch из настоящей MongoDB."""
+"""Integration tests for ordered MongoDB review reads."""
 
 import os
 import unittest
@@ -18,8 +18,8 @@ from kinopoisk_classifier.review_producer.mongo import MongoReviewReader
 )
 class MongoReviewReaderIntegrationTest(unittest.TestCase):
     def test_reads_ordered_pages_after_object_id(self):
-        # Уникальная коллекция изолирует тест от настоящих reviews и позволяет
-        # безопасно удалить только созданные этим запуском документы.
+
+
         collection_name = f"reviews_integration_{uuid.uuid4().hex}"
         settings = ReviewProducerSettings(
             reviews_collection=collection_name,
@@ -37,24 +37,24 @@ class MongoReviewReaderIntegrationTest(unittest.TestCase):
         ]
 
         try:
-            # Вставляем не по порядку, чтобы тест действительно проверял sort,
-            # а не случайно полагался на порядок insert_many.
+
+
             collection.insert_many(
                 [
                     {
                         "_id": review_ids[2],
-                        "text": "Третий отзыв",
+                        "text": "Third review",
                         "created_at": datetime.now(timezone.utc),
                     },
                     {
                         "_id": review_ids[0],
-                        "text": "Первый отзыв",
+                        "text": "First review",
                         "created_at": datetime.now(timezone.utc),
-                        "unused_source_field": "MongoReview его игнорирует",
+                        "unused_source_field": "MongoReview ignores this field",
                     },
                     {
                         "_id": review_ids[1],
-                        "text": "Второй отзыв",
+                        "text": "Second review",
                         "created_at": datetime.now(timezone.utc),
                     },
                 ]
@@ -74,7 +74,7 @@ class MongoReviewReaderIntegrationTest(unittest.TestCase):
             )
         finally:
             reader.close()
-            # Удаляем только уникальную коллекцию этого теста, не всю БД.
+
             seed_client[settings.mongo_database].drop_collection(collection_name)
             seed_client.close()
 

@@ -1,7 +1,4 @@
-"""
-Основная — macro-F1. Macro-F1 усредняет по классам
-с равным весом и штрафует за проваленный класс.
-"""
+"""Metrics used to evaluate sentiment classification quality."""
 
 import numpy as np
 from sklearn.metrics import f1_score, precision_score, recall_score, accuracy_score

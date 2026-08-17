@@ -1,1 +1,1 @@
-"""Offline-контур обучения, калибровки и регистрации модели."""
+"""Model training and registration pipeline."""

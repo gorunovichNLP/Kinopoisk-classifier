@@ -1,26 +1,18 @@
-"""Сохранение PredictionEventV1 в PostgreSQL.
+"""Persist prediction events in PostgreSQL."""
 
-Паттерны проектирования:
-- Repository: остальной код вызывает ping(), save() и close(), не зная SQL.
 
-Архитектурные приёмы:
-- Dependency Injection: готовое соединение можно передать через конструктор.
-- Idempotent Write: повторный prediction_id не создаёт вторую строку.
-"""
-
-# psycopg — официальный современный PostgreSQL-драйвер для Python.
 import psycopg
 
-# Настройки содержат DSN и timeout подключения.
+
 from kinopoisk_classifier.prediction_writer.config import PredictionWriterSettings
 
-# Это уже проверенное Pydantic-событие из Kafka.
+
 from kinopoisk_classifier.shared.schemas import PredictionEventV1
 
 
-# SQL держим отдельно от метода, чтобы Python-логика save() читалась проще.
-# Значения не вставляются в строку вручную: %s placeholders безопасно заполняет
-# сам psycopg, правильно преобразуя строки, числа, None и datetime.
+
+
+
 INSERT_PREDICTION_SQL = """
 INSERT INTO sentiment.prediction_history (
     prediction_id,
@@ -51,7 +43,7 @@ ON CONFLICT (prediction_id) DO NOTHING
 
 
 class PostgresPredictionRepository:
-    """Записывает валидные predictions в таблицу истории."""
+    """Repository for idempotent prediction persistence."""
 
     def __init__(
         self,
@@ -61,12 +53,12 @@ class PostgresPredictionRepository:
     ) -> None:
         self.settings = settings
 
-        # Запоминаем, кто создал соединение. Переданное снаружи соединение
-        # может использовать другой компонент, поэтому закрывать его нельзя.
+
+
         self._owns_connection = connection is None
 
         if connection is None:
-            # psycopg.connect открывает реальное сетевое соединение сразу.
+
             self.connection = psycopg.connect(
                 str(settings.postgres_dsn),
                 connect_timeout=settings.postgres_connect_timeout_seconds,
@@ -75,25 +67,25 @@ class PostgresPredictionRepository:
             self.connection = connection
 
     def ping(self) -> None:
-        """Выполняет простой запрос и проверяет соединение с PostgreSQL."""
+        """Verify the backing service connection."""
 
         try:
-            # Cursor выполняет SQL внутри транзакции текущего соединения.
+
             with self.connection.cursor() as cursor:
                 cursor.execute("SELECT 1")
 
-            # Даже SELECT начинает транзакцию. Завершаем её сразу, чтобы
-            # соединение не оставалось в состоянии idle in transaction.
+
+
             self.connection.commit()
         except Exception:
-            # После ошибки PostgreSQL не принимает новые команды до rollback.
+
             self.connection.rollback()
             raise
 
     def save(self, prediction: PredictionEventV1) -> bool:
-        """Сохраняет prediction и возвращает ``True``, если строка новая."""
+        """Persist a validated value transactionally."""
 
-        # Порядок значений точно соответствует порядку колонок в SQL выше.
+
         values = (
             prediction.prediction_id,
             prediction.schema_version,
@@ -117,20 +109,20 @@ class PostgresPredictionRepository:
             with self.connection.cursor() as cursor:
                 cursor.execute(INSERT_PREDICTION_SQL, values)
 
-                # rowcount=1: PostgreSQL добавил строку.
-                # rowcount=0: ON CONFLICT увидел существующий prediction_id.
+
+
                 inserted = cursor.rowcount == 1
 
-            # Только после commit запись становится видна другим соединениям.
+
             self.connection.commit()
             return inserted
         except Exception:
-            # Отменяем незавершённую транзакцию и сохраняем исходную ошибку.
+
             self.connection.rollback()
             raise
 
     def close(self) -> None:
-        """Закрывает только соединение, созданное самим repository."""
+        """Close resources owned by this instance."""
 
         if self._owns_connection:
             self.connection.close()

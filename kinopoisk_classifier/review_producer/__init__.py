@@ -1,1 +1,1 @@
-"""MongoDB -> Kafka producer неизменяемых отзывов."""
+"""MongoDB-to-Kafka review producer service."""

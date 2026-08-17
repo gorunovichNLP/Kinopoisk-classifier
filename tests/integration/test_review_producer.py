@@ -1,14 +1,4 @@
-"""Интеграционный тест полного ReviewProducer.run().
-
-Тестовые паттерны:
-- Component Integration Test: для границ ReviewProducer используются настоящие
-  MongoDB и Kafka; inference worker и модель в этот тест не входят.
-- Application Smoke Test: настоящий main() собирает и запускает приложение.
-- Arrange–Act–Assert: готовим отзыв, запускаем цикл и проверяем событие/checkpoint.
-- Test Isolation: каждый запуск использует уникальные MongoDB-коллекции и id.
-
-GoF-паттерны непосредственно в тестовом файле не реализуются.
-"""
+"""Integration tests for the review producer service."""
 
 import os
 import time
@@ -42,19 +32,19 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
     def test_main_builds_application_publishes_review_and_stops(self):
         """Exercises the real Composition Root, settings, and cleanup."""
 
-        # Уникальный suffix не даёт двум запускам теста использовать одни данные.
+
         suffix = uuid.uuid4().hex
         reviews_collection = f"reviews_main_smoke_{suffix}"
         checkpoints_collection = f"checkpoints_main_smoke_{suffix}"
         checkpoint_id = f"review-producer-main-smoke-{suffix}"
         review_id = ObjectId()
 
-        # Берём локальные адреса MongoDB из стандартных настроек проекта.
-        # _env_file=None не позволяет случайному .env.local изменить основу теста.
+
+
         base_settings = ReviewProducerSettings(_env_file=None)
 
-        # main() сам создаёт ReviewProducerSettings, поэтому передаём уникальную
-        # конфигурацию так же, как production: через переменные окружения.
+
+
         environment = {
             "REVIEW_PRODUCER_MONGO_URI": str(base_settings.mongo_uri),
             "REVIEW_PRODUCER_MONGO_DATABASE": base_settings.mongo_database,
@@ -69,20 +59,20 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
             "REVIEW_PRODUCER_DELIVERY_TIMEOUT_SECONDS": "10",
         }
 
-        # Этот client принадлежит тесту: он подготавливает и проверяет данные.
+
         seed_client = MongoClient(str(base_settings.mongo_uri), tz_aware=True)
         database = seed_client[base_settings.mongo_database]
 
-        # Создаём один неизменяемый отзыв, который должен найти настоящий main().
+
         database[reviews_collection].insert_one(
             {
                 "_id": review_id,
-                "text": "Smoke-тест настоящего Review Producer main",
+                "text": "Smoke test for the real Review Producer entry point",
                 "created_at": datetime.now(timezone.utc),
             }
         )
 
-        # Consumer наблюдает внешний результат работы приложения в Kafka.
+
         consumer = Consumer(
             {
                 "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
@@ -93,15 +83,15 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
         )
         consumer.subscribe([base_settings.output_topic])
 
-        # Event — управляемая замена ручного Ctrl+C внутри автоматического теста.
+
         stop_event = Event()
 
-        # Исключения из дочернего Thread сохраняем и проверяем в основном потоке.
+
         thread_errors = []
 
         def run_main():
             try:
-                # Это настоящий main(): он сам создаст settings и все зависимости.
+
                 main(stop_event)
             except BaseException as error:
                 thread_errors.append(error)
@@ -109,15 +99,15 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
         main_thread = Thread(target=run_main, daemon=True)
 
         try:
-            # patch.dict временно добавляет environment только на время теста.
-            # clear=False сохраняет остальные системные переменные процесса.
+
+
             with patch.dict(os.environ, environment, clear=False):
                 main_thread.start()
 
                 received_event = None
                 deadline = time.monotonic() + 20.0
                 while time.monotonic() < deadline:
-                    # Не ждём timeout, если main уже завершился с ошибкой.
+
                     if thread_errors:
                         self.fail(f"ReviewProducer main failed: {thread_errors[0]!r}")
 
@@ -125,8 +115,8 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
                     if message is None or message.error():
                         continue
 
-                    # В общем topic могут остаться события других тестов.
-                    # Kafka key позволяет найти только созданный нами отзыв.
+
+
                     if message.key() != str(review_id).encode("utf-8"):
                         continue
 
@@ -141,15 +131,15 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
                 )
                 self.assertEqual(received_event.review_id, str(review_id))
 
-                # Просим run() завершиться и даём main() выполнить finally.
+
                 stop_event.set()
                 main_thread.join(timeout=5.0)
 
-            # Поток должен завершиться, а не зависнуть внутри рабочего цикла.
+
             self.assertFalse(main_thread.is_alive())
             self.assertEqual(thread_errors, [])
 
-            # Проверяем второй внешний эффект: main сохранил checkpoint в MongoDB.
+
             raw_checkpoint = database[checkpoints_collection].find_one(
                 {"_id": checkpoint_id}
             )
@@ -157,7 +147,7 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
             self.assertEqual(raw_checkpoint["last_review_id"], review_id)
 
         finally:
-            # Cleanup должен сработать даже при упавшем assert или timeout.
+
             stop_event.set()
             main_thread.join(timeout=5.0)
             consumer.close()
@@ -166,7 +156,7 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
             seed_client.close()
 
     def test_run_publishes_review_saves_checkpoint_and_stops(self):
-        # Уникальные имена изолируют MongoDB-данные этого запуска теста.
+
         suffix = uuid.uuid4().hex
         reviews_collection = f"reviews_producer_integration_{suffix}"
         checkpoints_collection = f"checkpoints_producer_integration_{suffix}"
@@ -183,12 +173,12 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
             _env_file=None,
         )
 
-        # Отдельный client наполняет MongoDB и позже удаляет тестовые коллекции.
+
         seed_client = MongoClient(str(settings.mongo_uri), tz_aware=True)
         seed_client[settings.mongo_database][reviews_collection].insert_one(
             {
                 "_id": review_id,
-                "text": "Интеграционный отзыв полного ReviewProducer",
+                "text": "Integration review for the complete ReviewProducer",
                 "created_at": datetime.now(timezone.utc),
             }
         )
@@ -203,7 +193,7 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
             checkpoint_store,
         )
 
-        # Уникальная consumer group читает событие, созданное этим тестом.
+
         consumer = Consumer(
             {
                 "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
@@ -217,13 +207,13 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
         stop_event = Event()
         thread_errors = []
 
-        # run() блокирует текущий поток, поэтому тест запускает его в фоне.
+
         def run_producer():
             try:
                 review_producer.run(stop_event)
             except BaseException as error:
-                # Исключение внутри Thread само не падает в основном потоке теста.
-                # Сохраняем его и проверяем после join().
+
+
                 thread_errors.append(error)
 
         producer_thread = Thread(target=run_producer, daemon=True)
@@ -249,7 +239,7 @@ class ReviewProducerIntegrationTest(unittest.TestCase):
             self.assertIsNotNone(received_event, "ReviewEventV1 was not received")
             self.assertEqual(received_event.review_id, str(review_id))
 
-            # set() немедленно разбудит run(), даже если он ждёт пустой batch.
+
             stop_event.set()
             producer_thread.join(timeout=5.0)
 

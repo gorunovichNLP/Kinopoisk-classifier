@@ -1,1 +1,1 @@
-"""Адаптер baseline-модели seara к контракту классов проекта."""
+"""Seara sentiment baseline integration."""

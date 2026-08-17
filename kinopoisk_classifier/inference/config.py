@@ -1,4 +1,4 @@
-"""Конфигурация Kafka inference worker из переменных окружения."""
+"""Environment-based configuration for the Kafka inference worker."""
 
 from typing import Literal
 
@@ -9,7 +9,7 @@ from kinopoisk_classifier.shared.schemas import NonBlankString
 
 
 class InferenceSettings(BaseSettings):
-    """Настройки с префиксом `INFERENCE_`, например `INFERENCE_MODEL_VERSION`."""
+    """InferenceSettings implementation."""
 
     model_config = SettingsConfigDict(
         env_prefix="INFERENCE_",
@@ -41,35 +41,30 @@ class InferenceSettings(BaseSettings):
         return None if self.device == "auto" else self.device
 
     def consumer_config(self) -> dict:
-        """Конфигурация librdkafka consumer-а.
-
-        Offset — позиция сообщения внутри partition. Мы управляем offset-ами
-        вручную, потому что сообщение считается обработанным только после
-        успешной публикации prediction или DLQ.
-        """
+        """Build a Kafka consumer configuration."""
 
         return {
             "bootstrap.servers": self.kafka_bootstrap_servers,
             "client.id": self.kafka_client_id,
             "group.id": self.kafka_group_id,
             "auto.offset.reset": self.auto_offset_reset,
-            # auto.commit мог бы подтвердить сообщение, пока модель ещё считает.
+
             "enable.auto.commit": False,
-            # auto.offset.store запоминает offset сразу после poll; это тоже рано.
+
             "enable.auto.offset.store": False,
-            # Если позже включим Kafka transactions, consumer не увидит
-            # сообщения из незавершённых или отменённых транзакций.
+
+
             "isolation.level": "read_committed",
         }
 
     def producer_config(self) -> dict:
-        """Конфигурация producer-а с защитой от дублей при сетевых retry."""
+        """Build an idempotent Kafka producer configuration."""
 
         return {
             "bootstrap.servers": self.kafka_bootstrap_servers,
             "client.id": self.kafka_client_id,
-            # Idempotent producer не отправит один record дважды из-за retry
-            # внутри одной producer-сессии. После рестарта дубли всё ещё возможны.
+
+
             "enable.idempotence": True,
             "acks": "all",
         }
